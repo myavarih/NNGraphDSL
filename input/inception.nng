@@ -1,0 +1,29 @@
+model InceptionBlock {
+    input x : tensor(32, 56, 56)
+    output out
+}
+
+graph {
+    node convA1 : Conv2d(in_ch=32, out_ch=16, kernel=1, stride=1, padding=0)
+    node reluA  : ReLU()
+
+    node convB1 : Conv2d(in_ch=32, out_ch=16, kernel=1, stride=1, padding=0)
+    node convB2 : Conv2d(in_ch=16, out_ch=32, kernel=3, stride=1, padding=1)
+    node reluB  : ReLU()
+
+    node cat1 : Concat(dim=1)
+    node bn1  : BatchNorm2d(num_features=48)
+    node out  : ReLU()
+
+    edge x -> convA1
+    edge convA1 -> reluA
+
+    edge x -> convB1
+    edge convB1 -> convB2
+    edge convB2 -> reluB
+
+    edge reluA -> cat1
+    edge reluB -> cat1
+    edge cat1 -> bn1
+    edge bn1 -> out
+}

@@ -1,0 +1,30 @@
+model TransformerEncoder {
+    input x : tensor(512, 128)
+    output out
+}
+
+graph {
+    node attn  : MultiHeadAttn(embed_dim=128, num_heads=8)
+    node drop1 : Dropout(p=0.1)
+    node norm1 : LayerNorm(normalized_shape=128)
+
+    node ff1   : Linear(in_features=128, out_features=512)
+    node gelu1 : GELU()
+    node drop2 : Dropout(p=0.1)
+    node ff2   : Linear(in_features=512, out_features=128)
+    node norm2 : LayerNorm(normalized_shape=128)
+    node out   : Flatten(start_dim=0, end_dim=1)
+
+    edge x -> attn
+    edge attn -> drop1
+    edge drop1 -> norm1
+    edge x -> norm1 [label="residual_1"]
+
+    edge norm1 -> ff1
+    edge ff1 -> gelu1
+    edge gelu1 -> drop2
+    edge drop2 -> ff2
+    edge ff2 -> norm2
+    edge norm1 -> norm2 [label="residual_2"]
+    edge norm2 -> out
+}
