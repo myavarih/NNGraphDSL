@@ -162,8 +162,16 @@
         \end{tcbclipinterior}},
         skin=bicolor,
         collower=white,
-        colbacklower=darkgray
+        colbacklower=darkgray,
+        before upper={\setLTR},
     },
+}
+
+% Fix: switch upper content to LTR so minted/verbatim aligns correctly
+% in RTL (xepersian) documents. \setLTR is defined by bidi (loaded by
+% xepersian), so this must run after \begin{document}.
+\AtBeginDocument{%
+    \tcbset{codeboxstyle/.append style={before upper={\setLTR}}}%
 }
 
 \renewcommand{\l@tcolorbox}{\@dottedtocline{1}{0pt}{3em}}
