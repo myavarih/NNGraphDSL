@@ -1,0 +1,801 @@
+% NNGraph DSL — گزارش فارسی
+% کامپایل با: xelatex -shell-escape report-fa.tex
+% (دو بار کامپایل برای فهرست مطالب و مراجع)
+
+\documentclass{nngraph-fa}
+
+% xepersian باید آخرین بسته بارگذاری شود
+\usepackage{xepersian}
+
+% تنظیم فونت — بعد از بارگذاری xepersian
+\settextfont[
+    BoldFont       = Vazirmatn Bold,
+    ItalicFont     = Vazirmatn,
+    BoldItalicFont = Vazirmatn Bold,
+]{Vazirmatn}
+\setdigitfont{Vazirmatn}
+\setmonofont{Liberation Mono}
+
+% ----------------------------------------------------------------
+% اطلاعات سند
+\title{
+    \textbf{کامپایلر \en{NNGraph DSL}} \\[0.5em]
+    \large یک زبان دامنه‌محور برای توصیف معماری شبکه‌های عصبی \\
+    و تولید خودکار کد \en{PyTorch}
+}
+\author{
+    \large گزارش فنی پروژه
+}
+\date{\today}
+
+% ----------------------------------------------------------------
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ================================================================
+\chapter*{چکیده}
+\markboth{چکیده}{چکیده}
+\addcontentsline{toc}{chapter}{چکیده}
+
+\en{NNGraph DSL} یک زبان دامنه‌محور (\en{Domain-Specific Language}) است که برای توصیف
+معماری شبکه‌های عصبی به صورت گراف جهت‌دار طراحی شده است. فایل‌های \code{.nng} را به
+عنوان ورودی دریافت کرده و کد \en{PyTorch} اجرایی تولید می‌کند که یک زیرکلاس
+\code{nn.Module} کامل با متدهای \code{\_\_init\_\_} و \code{forward} است.
+
+کامپایلر با \en{ANTLR4} نسخه ۴.۱۳.۲ ساخته شده و از الگوی \en{Listener} برای تحلیل
+معنایی و الگوریتم مرتب‌سازی توپولوژیک \en{Kahn} هم در تحلیل‌گر معنایی (تشخیص دور)
+و هم در مولد کد (ترتیب اجرا) استفاده می‌کند.
+
+مجموعه آزمایش شامل ۵۵ تست در چهار فایل است. چهار معماری نمونه---\en{MLP}،
+\en{ResBlock}، \en{InceptionBlock} و \en{TransformerEncoder}---با موفقیت کامپایل
+شده و \en{forward pass} آن‌ها با شکل خروجی صحیح اجرا شده است.
+
+% ================================================================
+\chapter{مقدمه}
+
+\section{انگیزه}
+
+نوشتن زیرکلاس‌های \code{nn.Module} در \en{PyTorch} به صورت دستی برای معماری‌های
+پیچیده، تکراری و مستعد خطاست. برای یک شبکه با ده لایه، برنامه‌نویس باید:
+
+\begin{itemize}
+    \item در \code{\_\_init\_\_} هر لایه را جداگانه با پارامترهای صحیح تعریف کند
+    \item در \code{forward} ترتیب اجرا را به صورت دستی مدیریت کند
+    \item در توپولوژی‌های شاخه‌دار، متغیرهای میانی را نام‌گذاری کند
+    \item مطمئن شود هیچ تنسور مشترکی پیش از استفاده بازنویسی نمی‌شود
+\end{itemize}
+
+\begin{exbox}{نمونه boilerplate دستی برای یک ResBlock}{resblock-manual}
+برنامه‌نویس باید این ساختار را برای یک \en{ResBlock} ساده بنویسد:
+
+\begin{latin}
+\begin{verbatim}
+class ResBlock(nn.Module):
+    def __init__(self):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64,
+                               kernel_size=3, stride=1, padding=1)
+        self.bn1   = nn.BatchNorm2d(num_features=64)
+        self.relu1 = nn.ReLU()
+        # ... و به همین ترتیب
+
+    def forward(self, x):
+        identity = x
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        # ... مدیریت دستی اتصال باقیمانده
+        x = x + identity
+        return x
+\end{verbatim}
+\end{latin}
+
+با \en{NNGraph DSL}، معماری یک‌بار به صورت گراف توصیف می‌شود و کامپایلر این کد را
+تولید می‌کند.
+\end{exbox}
+
+\section{هدف}
+
+هدف \en{NNGraph DSL} این است که فایل \code{.nng} تنها منبع حقیقت معماری باشد.
+برنامه‌نویس گراف را توصیف می‌کند؛ کامپایلر تمام \en{boilerplate} را تولید می‌کند.
+
+\section{دامنه کاربرد}
+
+این ابزار برای توصیف معماری‌های ثابت (نه پویا) مناسب است---شبکه‌هایی که گراف
+محاسباتی آن‌ها در زمان تعریف مدل مشخص است. پشتیبانی از کنترل جریان پویا
+(\code{if}/\code{else} درون \code{forward}) در نسخه‌های آینده برنامه‌ریزی شده است.
+
+% ================================================================
+\chapter{کارهای مرتبط}
+
+\section{چارچوب NADER}
+
+\begin{dfnbox}{NADER}{nader}
+\dfntxt{\en{NADER}} (\en{Neural Architecture Design via Representation}) چارچوبی است که
+معماری شبکه‌های عصبی را به صورت گراف محاسباتی جهت‌دار (\en{DAG}) مدل می‌کند.
+هر گره یک عملیات لایه است و هر یال جریان تنسور را نشان می‌دهد.
+\end{dfnbox}
+
+\en{NNGraph DSL} این مدل گراف را به عنوان پایه طراحی زبان به کار می‌گیرد.
+
+\section{ANTLR4}
+
+\begin{dfnbox}{ANTLR4}{antlr4}
+\dfntxt{\en{ANTLR4}} (\en{ANother Tool for Language Recognition}) ابزاری است که از یک
+فایل گرامر \code{.g4} به صورت خودکار \en{lexer}، \en{parser} و \en{listener/visitor}
+تولید می‌کند. نسخه مورد استفاده: \en{ANTLR 4.13.2}.
+\end{dfnbox}
+
+\subsection{الگوی Listener در برابر Visitor}
+
+\en{ANTLR4} دو الگو برای پیمایش درخت تجزیه ارائه می‌دهد:
+
+\begin{itemize}
+    \item \textbf{\en{Listener}}: \code{ParseTreeWalker} به صورت خودکار درخت را پیمایش
+    می‌کند و متدهای \code{enter*}/\code{exit*} را فراخوانی می‌کند. هیچ مقدار بازگشتی
+    نیاز نیست.
+    \item \textbf{\en{Visitor}}: برنامه‌نویس پیمایش را کنترل می‌کند و هر متد یک مقدار
+    برمی‌گرداند.
+\end{itemize}
+
+\begin{notebox}
+این کامپایلر از الگوی \en{Listener} استفاده می‌کند. متدهای \code{exit*} در
+\code{custom\_listener.py} حالت را در \code{self.nodes} و \code{self.edges}
+انباشته می‌کنند---این رویکرد برای ساختن یک مدل گراف از یک درخت تجزیه
+طبیعی‌تر است.
+\end{notebox}
+
+\section{پروژه EVM ANTLR}
+
+این کامپایلر سبک و ساختار کد را از پروژه \en{EVM} موجود در
+\code{PycharmProjects/Antlr} به ارث می‌برد. سه فایل از آن پروژه مستقیماً
+استفاده می‌شوند:
+
+\begin{itemize}
+    \item \code{ast.py} --- کلاس \code{AST} و \code{TreeNode}
+    \item \code{make\_ast\_subtree.py} --- ترکیب گره‌های درخت تجزیه
+    \item \code{ast\_to\_networkx\_graph.py} --- تجسم اختیاری گراف
+\end{itemize}
+
+% ================================================================
+\chapter{طراحی زبان}
+
+\section{ساختار برنامه}
+
+هر فایل \code{.nng} از سه بلوک تشکیل شده است. بلوک \code{config} اختیاری است:
+
+\begin{latin}
+\begin{verbatim}
+model <Name> {
+    input  <id> : tensor(<shape>)
+    output <id>
+}
+
+graph {
+    node <id> : <LayerType>(<params>)
+    ...
+    edge <src> -> <dst>
+    edge <src> -> <dst> [label="<string>"]
+    ...
+}
+
+config {
+    batch_size = <int>
+    device     = "cpu" | "cuda"
+}
+\end{verbatim}
+\end{latin}
+
+\begin{dfnbox}{بلوک model}{block-model}
+بلوک \code{model} نام کلاس تولیدشده، شناسه گره ورودی و شکل تنسور ورودی، و
+شناسه گره خروجی را مشخص می‌کند.
+\end{dfnbox}
+
+\begin{dfnbox}{بلوک graph}{block-graph}
+بلوک \code{graph} تمام گره‌های لایه (\code{node}) و یال‌های جهت‌دار (\code{edge})
+را تعریف می‌کند. ترتیب اعلان یال‌ها اهمیتی ندارد؛ کامپایلر ترتیب اجرا را از
+ساختار گراف محاسبه می‌کند.
+\end{dfnbox}
+
+\begin{dfnbox}{بلوک config}{block-config}
+بلوک \code{config} مقادیری را برای بلوک \code{\_\_main\_\_} کد تولیدشده تعیین
+می‌کند. \code{batch\_size} پیش‌فرض ۱ و \code{device} پیش‌فرض \code{'cpu'} است.
+\end{dfnbox}
+
+\section{گرامر}
+
+\begin{dfnbox}{آمار گرامر NNGraph.g4}{grammar-stats}
+\begin{itemize}[noitemsep]
+    \item فایل گرامر: \code{NNGraph.g4} (۵۶ خط)
+    \item قوانین تجزیه‌گر: ۱۴ قانون (\en{snake\_case})
+    \item توکن‌های واژه‌نگار: ۲۰ توکن (\en{ALL\_CAPS})
+\end{itemize}
+\end{dfnbox}
+
+قوانین تجزیه‌گر:
+
+\begin{latin}
+\begin{verbatim}
+program     : model_block graph_block config_block? EOF;
+model_block : MODEL ID '{' input_decl output_decl '}';
+input_decl  : INPUT ID ':' TENSOR shape_expr;
+output_decl : OUTPUT ID;
+graph_block : GRAPH '{' (node_decl | edge_decl)* '}';
+node_decl   : NODE ID ':' layer_expr;
+layer_expr  : ID '(' param_list? ')';
+param_list  : param (',' param)*;
+param       : ID '=' value;
+edge_decl   : EDGE ID ARROW ID ('[' LABEL '=' STRING ']')?;
+config_block: CONFIG '{' config_entry* '}';
+config_entry: ID '=' value;
+value       : FLOAT_LITERAL | INT_LITERAL | BOOL_LITERAL
+            | STRING | NONE | shape_expr;
+shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
+\end{verbatim}
+\end{latin}
+
+\begin{notebox}
+\textbf{نکته مهم طراحی:} \code{input\_decl} از \code{TENSOR shape\_expr} استفاده
+می‌کند نه \code{TENSOR '(' shape\_expr ')'}، زیرا \code{shape\_expr} خود پرانتزها
+را در بر می‌گیرد. این خطای رایج در نسخه‌های اولیه گرامر برطرف شد.
+\end{notebox}
+
+\section{سیستم انواع}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{نوع در DSL} & \textbf{نوع Python} & \textbf{مثال} \\
+\midrule
+\code{int}    & \code{int}          & \code{128} \\
+\code{float}  & \code{float}        & \code{0.1} \\
+\code{bool}   & \code{bool}         & \code{true} / \code{false} \\
+\code{string} & \code{str}          & \code{"relu"} \\
+\code{shape}  & \code{tuple[int]}   & \code{(64, 32, 32)} \\
+\code{None}   & \code{NoneType}     & \code{None} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+تمایز بین \code{int} و \code{float} در زمان کامپایل بررسی می‌شود. مثلاً
+\code{Dropout(p=1)} خطا می‌دهد چون \code{p} انتظار \code{float} دارد نه \code{int}.
+
+\section{انواع لایه}
+
+\subsection{لایه‌های پارامتردار}
+
+این لایه‌ها در \code{\_\_init\_\_} به صورت \code{self.<id> = nn.X(...)} تولید می‌شوند.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{کلیدواژه DSL} & \textbf{کلاس PyTorch} & \textbf{پارامترهای اصلی} \\
+\midrule
+\code{Linear}        & \code{nn.Linear}             & \code{in\_features}, \code{out\_features}, \code{bias} \\
+\code{Conv2d}        & \code{nn.Conv2d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride}, \code{padding} \\
+\code{Conv1d}        & \code{nn.Conv1d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride} \\
+\code{BatchNorm2d}   & \code{nn.BatchNorm2d}        & \code{num\_features} \\
+\code{LayerNorm}     & \code{nn.LayerNorm}          & \code{normalized\_shape} \\
+\code{MaxPool2d}     & \code{nn.MaxPool2d}          & \code{kernel}, \code{stride} \\
+\code{AvgPool2d}     & \code{nn.AvgPool2d}          & \code{kernel}, \code{stride} \\
+\code{Dropout}       & \code{nn.Dropout}            & \code{p} \\
+\code{Flatten}       & \code{nn.Flatten}            & \code{start\_dim}, \code{end\_dim} \\
+\code{Embedding}     & \code{nn.Embedding}          & \code{num\_embeddings}, \code{embedding\_dim} \\
+\code{MultiHeadAttn} & \code{nn.MultiheadAttention} & \code{embed\_dim}, \code{num\_heads} \\
+\code{LSTM}          & \code{nn.LSTM}               & \code{input\_size}, \code{hidden\_size}, \code{num\_layers} \\
+\code{GRU}           & \code{nn.GRU}                & \code{input\_size}, \code{hidden\_size} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{فعال‌سازی‌ها}
+
+\code{ReLU}، \code{Sigmoid}، \code{Tanh}، \code{GELU}، \code{Softmax(dim)}،
+\code{LeakyReLU(negative\_slope)}، \code{ELU(alpha)}.
+
+\subsection{عملیات گراف (بدون ماژول)}
+
+این انواع در \code{\_\_init\_\_} خطی تولید نمی‌کنند و فقط در \code{forward} ظاهر می‌شوند:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{کلیدواژه} & \textbf{پارامترها} & \textbf{کد تولیدشده} \\
+\midrule
+\code{Add}      & ---                           & \code{out = a + b} \\
+\code{Concat}   & \code{dim: int}               & \code{out = torch.cat([a, b], dim=d)} \\
+\code{Residual} & ---                           & \code{out = main + shortcut} \\
+\code{Split}    & \code{chunks: int, dim: int}  & \code{parts = torch.chunk(x, n, dim=d)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{نحو یال}
+
+\begin{dfnbox}{یال ساده}{edge-simple}
+\begin{latin}\code{edge src -> dst}\end{latin}
+
+یک یال جهت‌دار از گره \code{src} به گره \code{dst} تعریف می‌کند.
+\end{dfnbox}
+
+\begin{dfnbox}{یال برچسب‌دار}{edge-labeled}
+\begin{latin}\code{edge src -> dst [label="name"]}\end{latin}
+
+یک یال با برچسب رشته‌ای تعریف می‌کند. برچسب‌ها دو نقش دارند:
+\begin{itemize}
+    \item \code{"shortcut"}: یال اتصال کوتاه به گره \code{Residual()} را مشخص می‌کند.
+    \item \code{"residual\_*"}: اتصال کوتاه به گره‌ای با دو ورودی (الگوی \en{Transformer}).
+\end{itemize}
+\end{dfnbox}
+
+\section{کامنت‌ها}
+
+\begin{latin}
+\begin{verbatim}
+// کامنت تک‌خطی
+/* کامنت
+   چندخطی */
+\end{verbatim}
+\end{latin}
+
+% ================================================================
+\chapter{پیاده‌سازی}
+
+\section{معماری کامپایلر}
+
+\begin{dfnbox}{خط لوله کامپایل}{pipeline}
+کامپایلر چهار مرحله دارد:
+\begin{enumerate}
+    \item \textbf{تجزیه} (\en{Parsing}): \code{FileStream} $\to$ \code{NNGraphLexer} $\to$
+    \code{NNGraphParser.program()} $\to$ درخت تجزیه
+    \item \textbf{تحلیل معنایی} (\en{Semantic Analysis}): \code{ParseTreeWalker} +
+    \code{NNGraphCustomListener} $\to$ مدل گراف
+    \item \textbf{تولید کد} (\en{Code Generation}): \code{CodeGenerator.generate()} $\to$
+    رشته Python
+    \item \textbf{خروجی}: نوشتن به فایل \code{.py} یا چاپ در \code{stdout}
+\end{enumerate}
+\end{dfnbox}
+
+\subsection{مسئولیت فایل‌ها}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{فایل} & \textbf{نقش} \\
+\midrule
+\code{NNGraph.g4}             & منبع حقیقت گرامر (۵۶ خط) \\
+\code{gen/NNGraphLexer.py}    & تولیدشده توسط ANTLR4 --- نباید ویرایش شود \\
+\code{gen/NNGraphParser.py}   & تولیدشده توسط ANTLR4 --- نباید ویرایش شود \\
+\code{gen/NNGraphListener.py} & \en{listener} پایه با متدهای خالی --- نباید ویرایش شود \\
+\code{custom\_listener.py}    & تحلیل معنایی (۲۹۳ خط) \\
+\code{code\_generator.py}     & تولید کد PyTorch (۲۳۹ خط) \\
+\code{main.py}                & رابط CLI و تابع \code{compile\_nng()} (۷۳ خط) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{تحلیل‌گر معنایی}
+
+\begin{dfnbox}{NNGraphCustomListener}{custom-listener}
+کلاس \code{NNGraphCustomListener(NNGraphListener)} در \code{custom\_listener.py}
+تمام منطق تحلیل معنایی را پیاده می‌کند. حالت داخلی:
+\begin{itemize}[noitemsep]
+    \item \code{self.nodes}: \code{dict[id, \{type, params, line\}]}
+    \item \code{self.edges}: \code{list[\{src, dst, label, line\}]}
+    \item \code{self.config}: \code{dict[key, value]}
+\end{itemize}
+\end{dfnbox}
+
+\subsection{انتشار مقدار در درخت}
+
+متدهای \code{exitShape\_expr} و \code{exitValue} مقادیر را روی خود context ذخیره
+می‌کنند:
+
+\begin{latin}
+\begin{verbatim}
+def exitShape_expr(self, ctx):
+    ints = [int(ctx.INT_LITERAL(i).getText())
+            for i in range(ctx.INT_LITERAL().__len__())]
+    ctx.pvalue = tuple(ints)
+    ctx.ptype  = tuple
+\end{verbatim}
+\end{latin}
+
+این رویکرد تضمین می‌کند که هر context پس از خروج از آن، مقادیر فرزندانش را
+در دسترس دارد---الگویی که در پروژه EVM مرجع نیز استفاده شده است.
+
+\subsection{قوانین اعتبارسنجی}
+
+هشت قانون اعتبارسنجی در دو فاز اجرا می‌شوند:
+
+\textbf{فاز اول (در زمان پیمایش درخت):}
+\begin{enumerate}
+    \item \textbf{شناسه تکراری گره}: در \code{exitNode\_decl}
+    \item \textbf{ارجاع نامعتبر در یال}: در \code{exitEdge\_decl}
+    \item \textbf{نوع لایه ناشناس}: در \code{exitNode\_decl}
+    \item \textbf{عدم تطابق نوع پارامتر}: در \code{exitNode\_decl}
+\end{enumerate}
+
+\textbf{فاز دوم (در \code{exitGraph\_block}، پس از تکمیل گراف):}
+\begin{enumerate}
+    \setcounter{enumi}{4}
+    \item \textbf{گره خروجی اعلان‌نشده}: در \code{\_validate\_output\_declared}
+    \item \textbf{گره고립} (هشدار): در \code{\_validate\_orphans}
+    \item \textbf{آریتی Residual != 2}: در \code{\_validate\_residual\_arity}
+    \item \textbf{تشخیص دور با Kahn}: در \code{\_validate\_no\_cycles}
+    \item \textbf{قابلیت دسترسی BFS}: در \code{\_validate\_reachability}
+\end{enumerate}
+
+\subsection{قالب پیام خطا}
+
+\begin{genbox}{قالب خطا}
+\begin{latin}
+\texttt{[line L:C] SemanticError: <message>}
+\end{latin}
+
+\vspace{0.5em}
+که \code{L} شماره سطر (از ۱) و \code{C} ستون توکن (از ۰) است.
+هشدارها فقط در \code{stderr} چاپ می‌شوند و کامپایل را متوقف نمی‌کنند.
+\end{genbox}
+
+\subsection{\_FakeCtx برای خطاهای پس از پیمایش}
+
+خطاهایی که در \code{exitGraph\_block} رخ می‌دهند context زنده ندارند. یک کلاس داخلی
+\code{\_FakeCtx} شماره سطر را از رکورد اعلان گره حمل می‌کند:
+
+\begin{latin}
+\begin{verbatim}
+class _FakeCtx:
+    class start:
+        line   = info["line"]
+        column = 0
+\end{verbatim}
+\end{latin}
+
+\section{مولد کد}
+
+\begin{dfnbox}{CodeGenerator}{codegen}
+کلاس \code{CodeGenerator} در \code{code\_generator.py} چهار گام داخلی دارد:
+\begin{enumerate}[noitemsep]
+    \item \code{\_compute\_graph()}: ساخت لیست‌های مجاورت و مرتب‌سازی توپولوژیک
+    \item \code{\_assign\_vars()}: تخصیص نام متغیر Python به هر گره
+    \item \code{\_emit\_init()} + \code{\_emit\_forward()}: تولید خطوط کد
+    \item \code{\_assemble()}: ترکیب در سورس Python نهایی
+\end{enumerate}
+\end{dfnbox}
+
+\subsection{الگوریتم تخصیص متغیر}
+
+\begin{dfnbox}{اصل اساسی}{var-invariant}
+\code{var\_at[n] = 'x'} فقط وقتی که \code{out\_degree[predecessor] == 1}.
+
+وقتی یک گره به چند مقصد فرستاده می‌شود (\code{out\_degree > 1})، تنسور آن
+هنوز توسط شاخه‌های دیگر نیاز است. بازنویسی \code{x} در این نقطه آن را خراب
+می‌کند. به جای آن، گره بعدی نام شناسه خودش را به عنوان متغیر دریافت می‌کند.
+\end{dfnbox}
+
+چهار قانون کامل (به ترتیب در \code{\_assign\_vars}):
+
+\begin{latin}
+\begin{verbatim}
+1. گره ورودی:  var_at[input_id] = 'x'
+
+2. گره ادغام (in_degree > 1):
+       var_at[n] = 'x'       if out_degree[n] <= 1
+       var_at[n] = node_id   if out_degree[n] > 1
+
+3. شروع شاخه (predecessor.out_degree > 1):
+       var_at[n] = node_id
+
+4. ادامه خطی (predecessor.out_degree == 1):
+       var_at[n] = var_at[predecessor]
+\end{verbatim}
+\end{latin}
+
+\begin{exbox}{ردیابی MLP (زنجیره خطی)}{trace-mlp}
+\begin{latin}
+\texttt{x → fc1 → relu1 → fc2 → relu2 → drop → fc3 → out}
+\end{latin}
+
+هر predecessor دارای \code{out\_degree == 1} است $\Rightarrow$ قانون ۴ همیشه اعمال
+می‌شود $\Rightarrow$ همه گره‌ها \code{var\_at = 'x'} دارند.
+کد \code{forward} از \code{x} در همه جا استفاده می‌کند.
+\end{exbox}
+
+\begin{exbox}{ردیابی ResBlock (فن‌اوت سپس ادغام)}{trace-resblock}
+\code{x} به \code{conv1} (مسیر اصلی) و \code{skip} (اتصال کوتاه) فرستاده می‌شود.
+پس \code{out\_degree[x] = 2}.
+
+\begin{itemize}
+    \item \code{conv1}: قانون ۳ $\Rightarrow$ \code{var\_at = 'conv1'}
+    \item \code{bn1}, \code{relu1}, \code{conv2}, \code{bn2}: قانون ۴ $\Rightarrow$ همه \code{'conv1'}
+    \item \code{skip} (Residual، \code{in\_degree=2}): قانون ۲، \code{out\_degree=1}
+    $\Rightarrow$ \code{var\_at = 'x'}
+    \item کد تولیدشده: \code{x = conv1 + x}
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{ردیابی InceptionBlock (دو شاخه موازی)}{trace-inception}
+\code{out\_degree[x] = 2} (به \code{convA1} و \code{convB1}).
+
+\begin{itemize}
+    \item \code{convA1}: قانون ۳ $\Rightarrow$ \code{'convA1'}
+    \item \code{convB1}: قانون ۳ $\Rightarrow$ \code{'convB1'}
+    \item \code{convA2}: قانون ۴ $\Rightarrow$ ارث از \code{'convA1'}
+    \item \code{convB2}: قانون ۴ $\Rightarrow$ ارث از \code{'convB1'}
+    \item \code{cat1} (Concat، \code{in\_degree=2}): قانون ۲ $\Rightarrow$ \code{'x'}
+    \item کد: \code{x = torch.cat([convA1, convB1], dim=1)}
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{ردیابی TransformerEncoder (دو زیرلایه residual ضمنی)}{trace-transformer}
+\code{out\_degree[x] = 2} (به \code{attn} و \code{norm1}).\\
+\code{out\_degree[norm1] = 2} (به \code{ff1} و \code{norm2}).
+
+\begin{itemize}
+    \item \code{attn}: قانون ۳ $\Rightarrow$ \code{'attn'}
+    \item \code{drop1}: قانون ۴ $\Rightarrow$ \code{'attn'}
+    \item \code{norm1} (\code{in\_degree=2, out\_degree=2}): قانون ۲ $\Rightarrow$ \code{'norm1'}
+    \item \code{ff1}: قانون ۳ $\Rightarrow$ \code{'ff1'}
+    \item \code{gelu1, drop2, ff2}: قانون ۴ $\Rightarrow$ \code{'ff1'}
+    \item \code{norm2} (\code{in\_degree=2, out\_degree=1}): قانون ۲ $\Rightarrow$ \code{'x'}
+\end{itemize}
+
+خطوط تولیدشده:
+\begin{latin}
+\begin{verbatim}
+attn, _ = self.attn(x, x, x)
+attn     = self.drop1(attn)
+norm1    = self.norm1(x + attn)
+ff1      = self.ff1(norm1)
+ff1      = self.gelu1(ff1)
+ff1      = self.drop2(ff1)
+ff1      = self.ff2(ff1)
+x        = self.norm2(norm1 + ff1)
+\end{verbatim}
+\end{latin}
+\end{exbox}
+
+\subsection{موارد خاص تولید کد}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{الگو} & \textbf{شرط} & \textbf{کد تولیدشده} \\
+\midrule
+\code{MultiHeadAttn}    & نوع لایه      & \code{out, \_ = self.attn(x, x, x)} \\
+\code{LSTM / GRU}       & نوع لایه      & \code{out, \_ = self.lstm(x)} \\
+\code{Residual}         & گره بدون ماژول & \code{out = main + shortcut} \\
+\code{Add}              & گره بدون ماژول & \code{out = a + b} \\
+\code{Concat}           & گره بدون ماژول & \code{out = torch.cat([a, b], dim=d)} \\
+\code{Split}            & گره بدون ماژول & \code{parts = torch.chunk(x, n, dim=d)} \\
+\en{Residual ضمنی}   & \code{in\_degree>1} + برچسب \code{residual\_*} & \code{out = self.norm(skip + main)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+\textbf{نگاشت نام پارامتر:} DSL از نام‌های کوتاه‌تر استفاده می‌کند. مولد کد آن‌ها
+را به نام‌های PyTorch نگاشت می‌کند: \code{in\_ch} $\to$ \code{in\_channels}،
+\code{out\_ch} $\to$ \code{out\_channels}، \code{kernel} $\to$ \code{kernel\_size}.
+همه نام‌های دیگر بدون تغییر عبور می‌کنند.
+\end{notebox}
+
+\subsection{batch\_first در MultiHeadAttn}
+
+\code{nn.MultiheadAttention} از \en{PyTorch} به صورت پیش‌فرض \code{batch\_first=False}
+است. مولد کد همیشه \code{batch\_first=True} اضافه می‌کند تا با شکل رایج
+\code{(batch, seq, dim)} سازگار باشد.
+
+\subsection{ساختار کد خروجی}
+
+\begin{latin}
+\begin{verbatim}
+import torch
+import torch.nn as nn
+
+
+class <ModelName>(nn.Module):
+    def __init__(self):
+        super(<ModelName>, self).__init__()
+        <init_lines>
+
+    def forward(self, x):
+        <forward_lines>
+        return <output_var>
+
+
+if __name__ == '__main__':
+    device = torch.device('<device>')
+    model  = <ModelName>().to(device)
+    x      = torch.randn(<batch_size>, <input_shape...>).to(device)
+    print(model(x).shape)
+\end{verbatim}
+\end{latin}
+
+% ================================================================
+\chapter{ارزیابی}
+
+\section{مجموعه آزمایش}
+
+\begin{dfnbox}{آمار آزمایش}{test-stats}
+\begin{itemize}[noitemsep]
+    \item تعداد کل تست‌ها: \textbf{۵۵}
+    \item فریم‌ورک: \code{pytest} نسخه ۸.۴.۲
+    \item زمان اجرا: حدود ۱.۰۹ ثانیه
+\end{itemize}
+\end{dfnbox}
+
+\begin{center}
+\begin{tabular}{lcp{6cm}}
+\toprule
+\textbf{فایل} & \textbf{تست‌ها} & \textbf{پوشش} \\
+\midrule
+\code{test\_parser.py}   & ۸  & گرامر بدون خطای نحوی برای ۴ نمونه؛ config، برچسب، شکل \\
+\code{test\_listener.py} & ۱۴ & ۴ ورودی معتبر؛ ۱۰ شرط خطا با \code{SystemExit} \\
+\code{test\_codegen.py}  & ۱۹ & نام کلاس‌های nn، مقادیر پارامتر، الگوهای forward \\
+\code{test\_e2e.py}      & ۱۴ & کامپایل کامل + ایجاد نمونه + forward pass با شکل صحیح \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{نمونه‌های کارکرده}
+
+\begin{exbox}{MLP — زنجیره خطی ۳ لایه}{eval-mlp}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(784)} --- خروجی: \code{(batch, 10)}
+    \item توپولوژی: زنجیره خطی
+    \item استراتژی متغیر: همه \code{x}
+    \item آزمایش: \code{Softmax} ردیف‌ها به ۱ جمع می‌شوند (\code{atol=1e-5})
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{ResBlock — بلوک کانولوشنی با اتصال باقیمانده}{eval-resblock}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(64, 32, 32)} --- خروجی: \code{(batch, 65536)} پس از Flatten
+    \item توپولوژی: فن‌اوت از ورودی، ادغام در \code{Residual()}
+    \item آزمایش: شکل صحیح؛ در حالت eval خروجی قطعی است
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{InceptionBlock — دو شاخه Conv موازی}{eval-inception}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(32, 56, 56)} --- خروجی: \code{(batch, 48, 56, 56)}
+    \item شاخه A: ۱۶ کانال؛ شاخه B: ۳۲ کانال؛ ادغام: \code{Concat(dim=1)} $\to$ ۴۸ کانال
+    \item آزمایش: ابعاد فضایی تغییر نمی‌کنند
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{TransformerEncoder — یک لایه encoder}{eval-transformer}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(512, 128)} --- خروجی: \code{(1024, 128)} پس از Flatten
+    \item دو زیرلایه residual ضمنی (بدون گره \code{Residual()})
+    \item \code{MultiHeadAttn} با \code{embed\_dim=128, num\_heads=8}
+    \item آزمایش: شکل صحیح؛ در حالت eval خروجی قطعی است
+\end{itemize}
+\end{exbox}
+
+\section{اثبات درستی متغیرها}
+
+\begin{dfnbox}{اثبات عدم بازنویسی تنسور}{var-correctness}
+برای هر نمونه شاخه‌دار، \code{data\_ptr()} تنسور ورودی در طول محاسبات forward
+ردیابی شد:
+\begin{itemize}[noitemsep]
+    \item \textbf{ResBlock}: \code{x.data\_ptr()} در نقطه \code{x = conv1 + x} تغییر نکرده
+    \item \textbf{Inception}: \code{x.data\_ptr()} هنگام فراخوانی \code{convA1(x)} و \code{convB1(x)} یکسان است
+    \item \textbf{Transformer}: \code{x.data\_ptr()} هنگام \code{norm1(x + attn)}؛ \code{norm1.data\_ptr()} هنگام \code{norm2(norm1 + ff1)} تغییر نکرده
+\end{itemize}
+\end{dfnbox}
+
+این نتیجه مستقیماً از اصل \code{var\_at[n]='x'} فقط وقتی \code{out\_degree=1} پیروی می‌کند.
+
+\section{آمار کدبیس}
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{فایل/دایرکتوری} & \textbf{خطوط} \\
+\midrule
+\code{NNGraph.g4}                    & ۵۶ \\
+\code{custom\_listener.py}           & ۲۹۳ \\
+\code{code\_generator.py}            & ۲۳۹ \\
+\code{main.py}                       & ۷۳ \\
+\code{tests/} (۴ فایل)              & ۵۷۵ \\
+\code{required\_code\_collection/}   & $\approx$۱۰۰ \\
+\midrule
+\textbf{جمع}                         & $\approx$۱۳۳۶ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}[noitemsep]
+    \item زبان: Python 3.14.3
+    \item ANTLR: 4.13.2
+    \item PyTorch: 2.10.0
+    \item pytest: 8.4.2
+\end{itemize}
+
+% ================================================================
+\chapter{تصمیمات طراحی}
+
+\section{Listener در برابر Visitor}
+
+الگوی Listener به صورت طبیعی با انباشت حالت سازگار است. متدهای \code{exit*}
+می‌توانند مستقیماً روی \code{self.nodes} و \code{self.edges} عمل کنند بدون اینکه
+مقادیر را از طریق درخت برگردانند. برای یک کامپایلر گراف که هدفش ساختن یک مدل
+گراف از درخت تجزیه است، این انتخاب طبیعی‌تر از Visitor است.
+
+\section{load\_from\_listener() در برابر generate(traversal)}
+
+پروژه EVM مرجع از \code{CodeGenerator.generate(traversal)} استفاده می‌کند که یک
+لیست توکن پس‌ترتیب دریافت می‌کند---مناسب برای تولید بایت‌کد پشته‌ای. برای
+کامپایلر گراف، ورودی طبیعی ساختار گراف (گره‌ها + یال‌ها) است نه جریان خطی
+توکن. پس \code{load\_from\_listener(listener)} مستقیم‌تر است.
+
+\section{نام‌گذاری متغیر با node\_id}
+
+مثال‌های مشخصات زبان از نام‌های تک‌حرفی (\code{a}، \code{b}) یا نام‌های توصیفی
+(\code{identity}، \code{attn\_out}) استفاده می‌کنند. این کامپایلر از شناسه واقعی گره
+(\code{convA1}، \code{conv1}، \code{attn}) استفاده می‌کند زیرا:
+\begin{itemize}[noitemsep]
+    \item قطعی است
+    \item خوانا است
+    \item برای گراف‌های بزرگ‌تر بدون شمارنده کار می‌کند
+    \item خروجی ریاضی یکسان است
+\end{itemize}
+
+% ================================================================
+\chapter{نتیجه‌گیری و کارهای آینده}
+
+\section{نتیجه‌گیری}
+
+\en{NNGraph DSL} یک زنجیره کامپایلر چهار مرحله‌ای از \code{.nng} به
+\code{nn.Module} قابل اجرا ارائه می‌دهد. کامپایلر:
+
+\begin{itemize}
+    \item گرامر ANTLR4 با ۱۴ قانون تجزیه‌گر و ۲۰ توکن
+    \item ۲۴ نوع لایه را پشتیبانی می‌کند
+    \item ۸ قانون اعتبارسنجی را اجرا می‌کند
+    \item شاخه‌بندی پیچیده را بدون بازنویسی تنسور مدیریت می‌کند
+    \item با ۵۵ تست در چهار معماری نمونه اعتبارسنجی شده است
+\end{itemize}
+
+\section{کارهای آینده}
+
+این موارد در مشخصات زبان پیش‌بینی شده‌اند اما پیاده‌سازی نشده‌اند:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{قابلیت} & \textbf{توضیح} \\
+\midrule
+استنتاج شکل        & انتشار شکل تنسور در طول گراف و تشخیص عدم تطابق در کامپایل \\
+صادرکردن ONNX       & تولید گراف سازگار با ONNX به جای Python \\
+داربست آموزش        & تولید حلقه آموزش با بهینه‌ساز و تابع خطا از بلوک \code{config} \\
+تجسم Graphviz       & خروجی نمودار گراف مدل \\
+زیرگراف‌های نام‌دار  & بلوک‌های ماکرو قابل استفاده مجدد (مثلاً \code{ResBlock} قابل تکرار) \\
+کنترل جریان پویا   & شاخه‌های \code{if}/\code{else} درون \code{forward} \\
+حاشیه‌نویسی کوانتیزاسیون & متادیتا برای تبدیل مدل به نسخه‌های کوانتیزه \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ================================================================
+\chapter*{منابع}
+\markboth{منابع}{منابع}
+\addcontentsline{toc}{chapter}{منابع}
+
+\begin{enumerate}
+    \item \en{Parr, T. (2013). \textit{The Definitive ANTLR 4 Reference}. Pragmatic Bookshelf.}
+    \item \en{Paszke, A., et al. (2019). PyTorch: An Imperative Style, High-Performance
+    Deep Learning Library. \textit{NeurIPS 2019}.}
+    \item \en{NADER Framework: Neural Architecture Design via Representation (referenced
+    in \texttt{NNGraph\_DSL\_Specification.md}).}
+    \item \en{Zhang, A. M. \textit{amznotes LaTeX template}.
+    \texttt{github.com/alexmingzhang/latex-notes-template}}
+\end{enumerate}
+
+\end{document}

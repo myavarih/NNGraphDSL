@@ -6,3 +6,8 @@ __pycache__/
 dist/
 build/
 .env
+docs/latex/*.aux
+docs/latex/*.log
+docs/latex/*.out
+docs/latex/*.toc
+docs/latex/_minted/
