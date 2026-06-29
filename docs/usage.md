@@ -30,6 +30,11 @@ python main.py [options]
   -o / --output PATH     output .py file  (default: output/model.py)
   --check-only           validate only; no code is emitted
   --print                print generated code to stdout
+  --show-ast             visualize the AST using networkx
+  --show-traversal       print topological traversal order to console
+  --show-shapes          print inferred tensor shapes per node
+  --graph-viz DOT_FILE   output Graphviz DOT file
+  --onnx ONNX_FILE       export model to ONNX format
 ```
 
 ### Compile to a file
@@ -58,6 +63,33 @@ python main.py -i input/inception.nng --print
 
 Sends the generated Python source to stdout. Useful for piping into another tool or
 for inspecting generated code without writing a file.
+
+### Show inferred shapes
+
+```bash
+python main.py -i input/mlp.nng --show-shapes
+```
+
+Propagates tensor shapes through the graph and prints each node's output shape to
+stderr. Catches dimension mismatches at compile time.
+
+### Export Graphviz visualization
+
+```bash
+python main.py -i input/inception.nng --graph-viz output/inception.dot
+```
+
+Writes a DOT file with color-coded nodes (by layer type), shape annotations, and
+dashed labeled edges. Render with `dot -Tpng output/inception.dot -o output/inception.png`.
+
+### Export to ONNX
+
+```bash
+python main.py -i input/mlp.nng --onnx output/mlp.onnx
+```
+
+Generates the model code, instantiates it, runs `torch.onnx.export` with dynamic
+batch axis, and saves the `.onnx` file.
 
 ### Combine flags
 
@@ -110,6 +142,11 @@ def compile_nng(
     output_path: str | None = None,
     check_only: bool = False,
     print_output: bool = False,
+    show_ast_flag: bool = False,
+    show_traversal: bool = False,
+    show_shapes: bool = False,
+    graph_viz: str | None = None,
+    onnx_path: str | None = None,
 ) -> str | None:
 ```
 

@@ -133,32 +133,90 @@ BFS from the input node did not reach the declared output. The output node eithe
 has no path from the input, or the graph is disconnected. Raised in
 `_validate_reachability` (`custom_listener.py:290`).
 
----
-
-## Warnings
-
-Warnings print to stderr but do not stop compilation. The generated output is still
-written.
-
 ### Orphan node
 
 ```
-[line L] Warning: Node '<id>' is declared but never referenced in any edge.
+[line L:0] SemanticError: Node '<id>' is declared but never referenced in any edge.
 ```
 
-A node appears in the `graph` block but is mentioned in no `edge` declaration. The
-node is not connected to the rest of the graph. It will appear in `__init__` but
-never be called in `forward`. Emitted in `_validate_orphans` (`custom_listener.py:221`).
+A node appears in the `graph` block but is mentioned in no `edge` declaration. This
+almost always indicates a wiring mistake (misspelled node name in an edge, or a
+forgotten edge). Raised in `_validate_orphans` (`custom_listener.py:221`).
 
 ### Node unreachable from input
 
 ```
-[line L] Warning: Node '<id>' is not reachable from input '<input_id>'.
+[line L:0] SemanticError: Node '<id>' is not reachable from input '<input_id>'.
 ```
 
 BFS from the input node did not reach this node. The node is part of an isolated
-subgraph. It will appear in `__init__` but never be called in `forward`. Emitted in
+subgraph and would never participate in the forward pass. Raised in
 `_validate_reachability` (`custom_listener.py:287`).
+
+---
+
+## Warnings
+
+Warnings print to stderr but do not stop compilation.
+
+Currently no conditions produce warnings. Orphan nodes and unreachable nodes, which
+were previously warnings, are now errors (see above).
+
+---
+
+## Shape inference errors
+
+Produced by the shape inference pass after semantic analysis. Format:
+
+```
+[line L] ShapeError at '<node_id>': <message>
+```
+
+### Dimension mismatch
+
+```
+[line L] ShapeError at 'fc2': in_features=256 but incoming last dim=128.
+```
+
+The `in_features` or `in_ch` parameter does not match the actual shape flowing into
+the node. Fix the parameter value or the upstream architecture.
+
+### Wrong input rank
+
+```
+[line L] ShapeError at 'conv1': Conv2d expects 3D input (C,H,W), got 1D.
+```
+
+The layer requires a specific number of dimensions. Check the input shape and any
+preceding `Flatten` or `Reshape` operations.
+
+### Split not divisible
+
+```
+[line L] ShapeError at 'split': Cannot split dim 1 (size 7) into 2 chunks.
+```
+
+The tensor dimension is not evenly divisible by the chunk count.
+
+### Concat dimension mismatch
+
+```
+[line L] ShapeError at 'cat1': Concat dim mismatch at axis 2: 56 vs 28.
+```
+
+Incoming tensors to `Concat` have mismatched sizes on non-concat dimensions.
+
+---
+
+## Quantization errors
+
+### Unknown quant mode
+
+```
+[line L:C] SemanticError: Unknown quant mode 'int4'. Valid: ['dynamic', 'qat', 'static'].
+```
+
+The `quant` parameter value is not one of the supported quantization modes.
 
 ---
 
@@ -173,4 +231,5 @@ These are not compiler errors. They surface when the generated `.py` file is run
 | `RuntimeError: Given groups=1, weight...` | `Conv2d.in_ch` does not match actual channel count |
 | CUDA out of memory | `batch_size` in `config` too large for available GPU memory |
 
-The compiler does not perform shape inference. All shape mismatches surface at runtime.
+The shape inference pass now catches most dimension mismatches at compile time.
+Remaining runtime errors may surface for edge cases not covered by static analysis.

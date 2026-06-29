@@ -2,6 +2,8 @@ from collections import deque
 
 NO_MODULE_NODES = {"Add", "Concat", "Residual", "Split", "__input__"}
 
+UNIVERSAL_PARAMS = {"quant"}
+
 PYTORCH_MAP = {
     "Linear":        ("nn.Linear",            {"in_features": "in_features", "out_features": "out_features", "bias": "bias"}),
     "Conv2d":        ("nn.Conv2d",             {"in_ch": "in_channels", "out_ch": "out_channels", "kernel": "kernel_size", "stride": "stride", "padding": "padding"}),
@@ -136,6 +138,7 @@ class CodeGenerator:
 
     def _emit_init(self):
         lines = []
+        has_quant = False
         for node_id in self.topo_order:
             info       = self.nodes[node_id]
             layer_type = info["type"]
@@ -143,13 +146,24 @@ class CodeGenerator:
                 continue
             pytorch_class, param_name_map = PYTORCH_MAP[layer_type]
             params_str = self._build_params(layer_type, info["params"], param_name_map)
-            lines.append(f"        self.{node_id} = {pytorch_class}({params_str})")
+            quant_mode = info["params"].get("quant", {}).get("value")
+            if quant_mode == "qat":
+                lines.append(f"        self.{node_id} = torch.quantization.QuantWrapper({pytorch_class}({params_str}))")
+                has_quant = True
+            else:
+                lines.append(f"        self.{node_id} = {pytorch_class}({params_str})")
+                if quant_mode:
+                    has_quant = True
+        if has_quant:
+            lines.append("        self.quant = torch.quantization.QuantStub()")
+            lines.append("        self.dequant = torch.quantization.DeQuantStub()")
+        self._has_quant = has_quant
         return lines
 
     def _build_params(self, layer_type, params, param_name_map):
         parts = []
         for dsl_name, pytorch_name in param_name_map.items():
-            if dsl_name in params:
+            if dsl_name in params and dsl_name not in UNIVERSAL_PARAMS:
                 val = params[dsl_name]["value"]
                 if isinstance(val, str):
                     parts.append(f'{pytorch_name}="{val}"')
@@ -163,8 +177,12 @@ class CodeGenerator:
 
     def _emit_forward(self):
         lines = []
+        if getattr(self, '_has_quant', False):
+            lines.append("        x = self.quant(x)")
         for node_id in self.topo_order:
             lines.extend(self._emit_node(node_id))
+        if getattr(self, '_has_quant', False):
+            lines.append(f"        {self.var_at[self.output_id]} = self.dequant({self.var_at[self.output_id]})")
         lines.append(f"        return {self.var_at[self.output_id]}")
         return lines
 

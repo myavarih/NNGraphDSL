@@ -106,6 +106,25 @@ Print generated code to stdout instead of writing a file:
 python main.py -i input/inception.nng --print
 ```
 
+Show inferred tensor shapes per node:
+
+```bash
+python main.py -i input/mlp.nng --show-shapes
+```
+
+Export a Graphviz DOT visualization:
+
+```bash
+python main.py -i input/inception.nng --graph-viz output/inception.dot
+dot -Tpng output/inception.dot -o output/inception.png
+```
+
+Export to ONNX format:
+
+```bash
+python main.py -i input/mlp.nng --onnx output/mlp.onnx
+```
+
 Run the generated model:
 
 ```bash
@@ -137,6 +156,10 @@ graph {
 config {
     batch_size = <int>
     device = "cpu" | "cuda"
+    loss = "CrossEntropyLoss"      // enables training scaffold
+    optimizer = "Adam"             // Adam | SGD | AdamW | RMSprop
+    lr = 0.001
+    epochs = 10
 }
 ```
 
@@ -174,6 +197,19 @@ Activations: `ReLU()`, `Sigmoid()`, `Tanh()`, `GELU()`, `Softmax(dim=1)`,
 
 Graph operations (no `nn.Module` in `__init__`): `Add()`, `Concat(dim=1)`,
 `Residual()`, `Split(chunks=2, dim=1)`.
+
+### Quantization annotations
+
+Any node can carry a `quant` parameter to enable quantization-aware compilation:
+
+```
+node fc1 : Linear(in_features=784, out_features=128, quant="dynamic")
+node fc2 : Linear(in_features=128, out_features=10, quant="qat")
+```
+
+Supported modes: `"dynamic"`, `"static"`, `"qat"`. QAT nodes are wrapped in
+`torch.quantization.QuantWrapper`. When any node has a quant annotation, the
+generated `forward()` includes `QuantStub`/`DeQuantStub` calls.
 
 ### Edges
 
@@ -222,10 +258,10 @@ The checks, in order:
 
 1. **Unique node IDs** — duplicate IDs in the `graph` block are rejected.
 2. **Undefined references** — both endpoints of every `edge` must be declared nodes.
-3. **Orphan nodes** — a node never referenced in any edge produces a warning, not an error.
+3. **Orphan nodes** — a node never referenced in any edge is an error.
 4. **Residual arity** — `Residual()` nodes with anything other than 2 incoming edges are rejected.
 5. **Cycle detection** — the graph must be a DAG. Any cycle is rejected.
-6. **Reachability** — nodes unreachable from the input produce a warning; an unreachable output node is an error.
+6. **Reachability** — nodes unreachable from the input are an error. An unreachable output node is also an error.
 7. **Parameter types** — each parameter is checked against the expected type for its layer. Passing `p=1` to `Dropout` (expects `float`) is an error.
 8. **Unknown layers** — layer names not in the supported set are rejected immediately.
 
@@ -305,6 +341,9 @@ gen/                         generated lexer and parser (do not edit)
 required_code_collection/    AST node class and tree utilities
 custom_listener.py           semantic analysis — exit* methods, error reporting
 code_generator.py            topological sort, variable assignment, PyTorch emit
+shape_inference.py           compile-time tensor shape propagation
+graph_viz.py                 Graphviz DOT visualization generator
+onnx_export.py               ONNX export via torch.onnx.export
 main.py                      CLI: compile_nng() + argparse
 input/                       .nng source files
 output/                      generated .py files
@@ -317,8 +356,5 @@ tests/                       pytest suite
 
 These are listed in the specification but not yet implemented:
 
-- Shape inference — propagate tensor shapes through the graph and catch mismatches at compile time.
-- ONNX export — emit an ONNX-compatible graph instead of Python.
-- Training scaffold — generate a training loop with optimizer and loss from the `config` block.
-- Graphviz visualization — output a diagram of the model graph.
-- Named sub-graphs — reusable macro blocks, so a `ResBlock` can be instantiated multiple times without re-declaring all its nodes.
+- Macros / templates — reusable named sub-graphs (e.g., a named ResBlock that can be instantiated multiple times).
+- Dynamic control flow — conditional branches expressed with an `if`/`else`-style construct.

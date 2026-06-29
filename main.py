@@ -13,11 +13,12 @@ from required_code_collection.ast_to_networkx_graph import show_ast
 from required_code_collection.traverse_graph import topological_sort
 from shape_inference import infer_shapes
 from graph_viz import generate_dot
+from onnx_export import export_onnx
 
 
 def compile_nng(input_path, output_path=None, check_only=False, print_output=False,
                 show_ast_flag=False, show_traversal=False, show_shapes=False,
-                graph_viz=None):
+                graph_viz=None, onnx_path=None):
     """
     Parse, semantically analyse, and optionally emit PyTorch code for a .nng file.
     Returns the generated source string (or None when check_only=True).
@@ -82,6 +83,12 @@ def compile_nng(input_path, output_path=None, check_only=False, print_output=Fal
             f.write(final_code)
         print(f"Written: {output_path}", file=sys.stderr)
 
+    if onnx_path:
+        device = listener.config.get("device", "cpu")
+        batch_size = listener.config.get("batch_size", 1)
+        export_onnx(final_code, listener.model_name, listener.input_shape,
+                    onnx_path, device=device, batch_size=batch_size)
+
     return final_code
 
 
@@ -95,6 +102,7 @@ def main(arguments):
         show_traversal = arguments.show_traversal,
         show_shapes    = arguments.show_shapes,
         graph_viz      = arguments.graph_viz,
+        onnx_path      = arguments.onnx,
     )
 
 
@@ -109,4 +117,5 @@ if __name__ == '__main__':
     ap.add_argument('--show-traversal',     action='store_true',       help='Print topological traversal order to console')
     ap.add_argument('--show-shapes',        action='store_true',       help='Print inferred tensor shapes per node')
     ap.add_argument('--graph-viz',          metavar='DOT_FILE',        help='Output Graphviz DOT file')
+    ap.add_argument('--onnx',               metavar='ONNX_FILE',       help='Export model to ONNX format')
     main(ap.parse_args())

@@ -50,8 +50,9 @@ input x : tensor(64, 32, 32)   // 64 channels, 32x32 spatial
 input x : tensor(512, 128)     // 512 tokens, embedding dim 128
 ```
 
-Shapes appear only in `input_decl`. They are not inferred or checked at compile time;
-mismatches surface at PyTorch runtime.
+Shapes appear only in `input_decl`. The compiler propagates shapes through the graph
+at compile time via the shape inference pass. Use `--show-shapes` to inspect inferred
+shapes. Dimension mismatches are caught before code generation.
 
 ---
 
@@ -125,9 +126,26 @@ in `forward` instead:
 | `Add` | none | `out = a + b` |
 | `Concat` | `dim: int` | `out = torch.cat([a, b, ...], dim=d)` |
 | `Residual` | none | `out = main + shortcut` |
-| `Split` | `chunks: int`, `dim: int` | `parts = torch.chunk(x, n, dim=d)` |
+| `Split` | `chunks: int`, `dim: int` | `split_0, split_1, ... = torch.chunk(x, n, dim=d)` |
 
 `Residual` requires exactly two incoming edges. One must be labeled `shortcut`.
+
+### Universal parameters
+
+These can be added to any node regardless of layer type:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `quant` | `string` | Quantization mode: `"dynamic"`, `"static"`, or `"qat"` |
+
+Example:
+
+```
+node fc1 : Linear(in_features=784, out_features=128, quant="dynamic")
+```
+
+QAT nodes are wrapped in `torch.quantization.QuantWrapper`. When any node has a
+quant annotation, `QuantStub`/`DeQuantStub` are added to `__init__` and `forward`.
 
 ---
 
@@ -169,12 +187,18 @@ The `config` block is optional. Keys and their effects on generated code:
 |---|---|---|
 | `batch_size` | `int` | first dimension of `torch.randn(...)` in `__main__` |
 | `device` | `string` | `torch.device(...)` in `__main__` |
+| `loss` | `string` | loss function class name; enables training scaffold |
+| `optimizer` | `string` | optimizer class name (default: `"Adam"`) |
+| `lr` | `float` | learning rate (default: `0.001`) |
+| `epochs` | `int` | number of training epochs (default: `10`) |
 
 If `batch_size` is absent, the generated `__main__` uses `1`. If `device` is absent,
 it uses `'cpu'`.
 
-Config values are not used inside `__init__` or `forward`. They affect only the
-run-at-the-bottom test block.
+When `loss` is set, the generated code includes a training loop with the specified
+optimizer, learning rate, and epoch count. Supported loss functions:
+`CrossEntropyLoss`, `MSELoss`, `BCELoss`, `BCEWithLogitsLoss`, `L1Loss`, `NLLLoss`,
+`SmoothL1Loss`. Supported optimizers: `Adam`, `SGD`, `AdamW`, `RMSprop`.
 
 ---
 

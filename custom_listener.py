@@ -33,6 +33,9 @@ LAYER_SCHEMA = {
 
 NO_MODULE_NODES = {"Add", "Concat", "Residual", "Split"}
 
+QUANT_MODES = {"dynamic", "static", "qat"}
+UNIVERSAL_PARAMS = {"quant": str}
+
 
 def error(msg, ctx):
     line = ctx.start.line
@@ -128,10 +131,11 @@ class NNGraphCustomListener(NNGraphListener):
             error(f"Unknown layer type '{layer_type}'.", ctx)
 
         schema = LAYER_SCHEMA[layer_type]
+        combined = {**schema, **UNIVERSAL_PARAMS}
         for pname, pinfo in params.items():
-            if pname not in schema:
+            if pname not in combined:
                 error(f"Unknown parameter '{pname}' for layer '{layer_type}'.", ctx)
-            expected = schema[pname]
+            expected = combined[pname]
             actual   = pinfo["type"]
             if isinstance(expected, tuple):
                 if actual not in expected:
@@ -145,6 +149,12 @@ class NNGraphCustomListener(NNGraphListener):
                         f"Parameter '{pname}' of '{layer_type}' expects {expected.__name__}, got {actual.__name__}.",
                         ctx,
                     )
+
+        if "quant" in params and params["quant"]["value"] not in QUANT_MODES:
+            error(
+                f"Unknown quant mode '{params['quant']['value']}'. Valid: {sorted(QUANT_MODES)}.",
+                ctx,
+            )
 
         self.nodes[node_id] = {"type": layer_type, "params": params, "line": ctx.start.line}
 

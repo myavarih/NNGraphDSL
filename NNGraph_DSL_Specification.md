@@ -473,9 +473,9 @@ The semantic analyzer validates the parse tree before code generation. It enforc
 
 | Rule | Description |
 |---|---|
-| No orphan nodes | Every declared node (except input/output) must appear in at least one edge. |
+| No orphan nodes | Every declared node (except input/output) must appear in at least one edge. Orphan nodes are rejected. |
 | No undefined references | Edge endpoints must reference declared node IDs. |
-| Input reachability | Every node must be reachable from the input node following edge directions. |
+| Input reachability | Every node must be reachable from the input node. Unreachable nodes are rejected. |
 | Output reachability | The output node must be reachable from at least one path from input. |
 | Cycle detection | The graph must be a DAG. Cycles are rejected (RNN state is modeled separately). |
 | Residual arity | A `Residual()` node must have exactly 2 incoming edges. |
@@ -509,7 +509,7 @@ x = torch.cat([a, b], dim=1)
 | `Add()` | `x = a + b` (or sum of all inputs) |
 | `Concat(dim=d)` | `x = torch.cat([a, b, ...], dim=d)` |
 | `Residual()` | `x = main_path + shortcut` (identity saved before first conv) |
-| `Split(chunks=n, dim=d)` | `parts = torch.chunk(x, n, dim=d)` |
+| `Split(chunks=n, dim=d)` | `split_0, split_1, ... = torch.chunk(x, n, dim=d)` |
 | `MultiHeadAttn` | `out, _ = self.attn(x, x, x)` (self-attention) |
 | `LSTM` / `GRU` | `out, _ = self.lstm(x)` (hidden state discarded by default) |
 
@@ -534,8 +534,8 @@ Error [line 18]: Node 'skip' (Residual) has 3 incoming edges; expected exactly 2
 // Type mismatch
 Error [line 9]: Parameter 'p' of Dropout expects float, got string "0.3".
 
-// Orphan node
-Warning [line 6]: Node 'bn_unused' is declared but never referenced in any edge.
+// Orphan node (now an error, not a warning)
+Error [line 6]: Node 'bn_unused' is declared but never referenced in any edge.
 ```
 
 ---
@@ -575,13 +575,16 @@ python -c "import my_model; print('OK')"
 
 ---
 
-## 9. Future Extensions
+## 9. Implemented Extensions
 
-- **Shape inference** — propagate tensor shapes through the graph and catch mismatches at compile time.
-- **Quantization annotations** — add quantization-related metadata to nodes.
-- **ONNX export** — emit an ONNX-compatible graph representation.
-- **Training scaffold** — generate a full training loop with optimizer and loss from the config block.
-- **Visual graph rendering** — output a Graphviz visualization of the model graph.
+- **Shape inference** — propagate tensor shapes through the graph and catch mismatches at compile time (`--show-shapes`).
+- **Quantization annotations** — add `quant="dynamic|static|qat"` to any node for quantization-aware compilation.
+- **ONNX export** — emit an ONNX-compatible model via `torch.onnx.export` (`--onnx FILE`).
+- **Training scaffold** — generate a full training loop with optimizer and loss from config block keys (`loss`, `optimizer`, `lr`, `epochs`).
+- **Visual graph rendering** — output a Graphviz DOT visualization of the model graph (`--graph-viz FILE`).
+
+## 10. Future Extensions
+
 - **Macros / templates** — allow reusable named sub-graphs (e.g., a named ResBlock that can be instantiated multiple times).
 - **Dynamic control flow** — conditional branches expressed with an `if`/`else`-style construct.
 
