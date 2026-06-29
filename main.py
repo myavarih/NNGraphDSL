@@ -11,9 +11,13 @@ from custom_listener import NNGraphCustomListener
 from code_generator import CodeGenerator
 from required_code_collection.ast_to_networkx_graph import show_ast
 from required_code_collection.traverse_graph import topological_sort
+from shape_inference import infer_shapes
+from graph_viz import generate_dot
 
 
-def compile_nng(input_path, output_path=None, check_only=False, print_output=False, show_ast_flag=False, show_traversal=False):
+def compile_nng(input_path, output_path=None, check_only=False, print_output=False,
+                show_ast_flag=False, show_traversal=False, show_shapes=False,
+                graph_viz=None):
     """
     Parse, semantically analyse, and optionally emit PyTorch code for a .nng file.
     Returns the generated source string (or None when check_only=True).
@@ -44,6 +48,22 @@ def compile_nng(input_path, output_path=None, check_only=False, print_output=Fal
     if show_traversal:
         print("Code gen traversal:", " → ".join(traversal), file=sys.stderr)
 
+    shapes = infer_shapes(listener.nodes, listener.edges, listener.input_id,
+                          listener.input_shape, traversal)
+
+    if show_shapes:
+        print("── Shape inference ──", file=sys.stderr)
+        for nid in traversal:
+            if nid != listener.input_id:
+                print(f"  {nid}: {shapes[nid]}", file=sys.stderr)
+
+    if graph_viz:
+        dot = generate_dot(listener.nodes, listener.edges, listener.input_id,
+                           listener.output_id, listener.model_name, shapes)
+        with open(graph_viz, "w") as f:
+            f.write(dot)
+        print(f"Graph written: {graph_viz}", file=sys.stderr)
+
     code_gen = CodeGenerator()
     code_gen.load_from_listener(listener, traversal)
 
@@ -73,6 +93,8 @@ def main(arguments):
         print_output   = arguments.print_output,
         show_ast_flag  = arguments.show_ast,
         show_traversal = arguments.show_traversal,
+        show_shapes    = arguments.show_shapes,
+        graph_viz      = arguments.graph_viz,
     )
 
 
@@ -85,4 +107,6 @@ if __name__ == '__main__':
                     action='store_true',    help='Print generated code to stdout')
     ap.add_argument('--show-ast',           action='store_true',       help='Visualize the AST using networkx')
     ap.add_argument('--show-traversal',     action='store_true',       help='Print topological traversal order to console')
+    ap.add_argument('--show-shapes',        action='store_true',       help='Print inferred tensor shapes per node')
+    ap.add_argument('--graph-viz',          metavar='DOT_FILE',        help='Output Graphviz DOT file')
     main(ap.parse_args())

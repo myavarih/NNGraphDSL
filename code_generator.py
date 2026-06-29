@@ -258,4 +258,52 @@ class CodeGenerator:
             f"    x = torch.randn({shape_str}).to(device)",
             f"    print(model(x).shape)",
         ]
+        parts.extend(self._emit_training(device, shape_str))
         return "\n".join(parts) + "\n"
+
+    def _emit_training(self, device, shape_str):
+        loss_fn = self.config.get("loss")
+        if not loss_fn:
+            return []
+
+        optimizer = self.config.get("optimizer", "Adam")
+        lr        = self.config.get("lr", 0.001)
+        epochs    = self.config.get("epochs", 10)
+
+        LOSS_MAP = {
+            "CrossEntropyLoss": "nn.CrossEntropyLoss()",
+            "MSELoss":          "nn.MSELoss()",
+            "BCELoss":          "nn.BCELoss()",
+            "BCEWithLogitsLoss": "nn.BCEWithLogitsLoss()",
+            "L1Loss":           "nn.L1Loss()",
+            "NLLLoss":          "nn.NLLLoss()",
+            "SmoothL1Loss":     "nn.SmoothL1Loss()",
+        }
+
+        OPTIM_MAP = {
+            "Adam":     "torch.optim.Adam",
+            "SGD":      "torch.optim.SGD",
+            "AdamW":    "torch.optim.AdamW",
+            "RMSprop":  "torch.optim.RMSprop",
+        }
+
+        loss_expr = LOSS_MAP.get(loss_fn, f"nn.{loss_fn}()")
+        optim_cls = OPTIM_MAP.get(optimizer, f"torch.optim.{optimizer}")
+
+        return [
+            "",
+            f"    criterion = {loss_expr}",
+            f"    optimizer = {optim_cls}(model.parameters(), lr={lr})",
+            "",
+            f"    # Training loop",
+            f"    model.train()",
+            f"    for epoch in range({epochs}):",
+            f"        x = torch.randn({shape_str}).to(device)",
+            f"        y = model(x)",
+            f"        target = torch.zeros_like(y)",
+            f"        loss = criterion(y, target)",
+            f"        optimizer.zero_grad()",
+            f"        loss.backward()",
+            f"        optimizer.step()",
+            f"        print(f'Epoch {{epoch+1}}/{epochs}, Loss: {{loss.item():.4f}}')",
+        ]
