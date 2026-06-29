@@ -41,8 +41,9 @@ class CodeGenerator:
         self.in_edges   = {}
         self.out_edges  = {}
         self.var_at     = {}
+        self._graph_computed = False
 
-    def load_from_listener(self, listener):
+    def load_from_listener(self, listener, traversal=None):
         self.model_name  = listener.model_name
         self.input_id    = listener.input_id
         self.input_shape = listener.input_shape
@@ -50,6 +51,14 @@ class CodeGenerator:
         self.nodes       = listener.nodes
         self.edges       = listener.edges
         self.config      = listener.config
+        if traversal is not None:
+            self.topo_order = traversal
+            self._graph_computed = True
+            self.in_edges  = {n: [] for n in self.nodes}
+            self.out_edges = {n: [] for n in self.nodes}
+            for e in self.edges:
+                self.in_edges[e["dst"]].append(e)
+                self.out_edges[e["src"]].append(e)
 
     def generate(self):
         self._compute_graph()
@@ -61,6 +70,8 @@ class CodeGenerator:
     # ── graph utilities ────────────────────────────────────────
 
     def _compute_graph(self):
+        if self._graph_computed:
+            return
         self.in_edges  = {n: [] for n in self.nodes}
         self.out_edges = {n: [] for n in self.nodes}
         for e in self.edges:
@@ -79,6 +90,7 @@ class CodeGenerator:
                 if in_degree[e["dst"]] == 0:
                     queue.append(e["dst"])
         self.topo_order = order
+        self._graph_computed = True
 
     def _assign_vars(self):
         out_degree = {n: len(self.out_edges[n]) for n in self.nodes}
@@ -101,14 +113,24 @@ class CodeGenerator:
                 continue
 
             src = my_in[0]["src"]
-            if out_degree[src] > 1:
-                # branch start: use node_id so shared source tensor isn't overwritten
+            src_type = self.nodes[src]["type"]
+            if src_type == "Split":
+                idx = self.out_edges[src].index(my_in[0])
+                var_at[node_id] = f"{src}_{idx}"
+            elif out_degree[src] > 1:
                 var_at[node_id] = node_id
             else:
-                # linear continuation: inherit source variable
                 var_at[node_id] = var_at[src]
 
         self.var_at = var_at
+
+    def _input_var(self, edge):
+        """Resolve the variable name for an edge's source, handling Split chunk indexing."""
+        src = edge["src"]
+        if self.nodes[src]["type"] == "Split":
+            idx = self.out_edges[src].index(edge)
+            return f"{src}_{idx}"
+        return self.var_at[src]
 
     # ── __init__ emission ─────────────────────────────────────
 
@@ -160,25 +182,26 @@ class CodeGenerator:
         if layer_type == "Residual":
             shortcut_edges = [e for e in my_in if e.get("label") == "shortcut"]
             main_edges     = [e for e in my_in if e.get("label") != "shortcut"]
-            main_var  = self.var_at[main_edges[0]["src"]]
-            skip_var  = self.var_at[shortcut_edges[0]["src"]]
+            main_var  = self._input_var(main_edges[0])
+            skip_var  = self._input_var(shortcut_edges[0])
             return [f"        {out_var} = {main_var} + {skip_var}"]
 
         if layer_type == "Add":
-            in_vars = [self.var_at[e["src"]] for e in my_in]
+            in_vars = [self._input_var(e) for e in my_in]
             rhs = " + ".join(in_vars)
             return [f"        {out_var} = {rhs}"]
 
         if layer_type == "Concat":
-            in_vars = [self.var_at[e["src"]] for e in my_in]
+            in_vars = [self._input_var(e) for e in my_in]
             dim     = info["params"].get("dim", {}).get("value", 1)
             return [f"        {out_var} = torch.cat([{', '.join(in_vars)}], dim={dim})"]
 
         if layer_type == "Split":
-            in_var  = self.var_at[my_in[0]["src"]]
+            in_var  = self._input_var(my_in[0])
             chunks  = info["params"].get("chunks", {}).get("value", 2)
             dim     = info["params"].get("dim", {}).get("value", 1)
-            return [f"        parts = torch.chunk({in_var}, {chunks}, dim={dim})"]
+            chunk_vars = ", ".join(f"{node_id}_{i}" for i in range(chunks))
+            return [f"        {chunk_vars} = torch.chunk({in_var}, {chunks}, dim={dim})"]
 
         # ── nodes with pytorch modules ─────────────────────────
 
@@ -188,14 +211,13 @@ class CodeGenerator:
             residual_edges = [e for e in my_in if (e.get("label") or "").startswith("residual")]
             main_edges     = [e for e in my_in if e not in residual_edges]
             if residual_edges:
-                skip_var = self.var_at[residual_edges[0]["src"]]
-                main_var = self.var_at[main_edges[0]["src"]]
+                skip_var = self._input_var(residual_edges[0])
+                main_var = self._input_var(main_edges[0])
                 return [f"        {out_var} = self.{node_id}({skip_var} + {main_var})"]
-            # fallback: just use first in-edge
-            in_var = self.var_at[my_in[0]["src"]]
+            in_var = self._input_var(my_in[0])
             return [f"        {out_var} = self.{node_id}({in_var})"]
 
-        in_var = self.var_at[my_in[0]["src"]]
+        in_var = self._input_var(my_in[0])
 
         if layer_type == "MultiHeadAttn":
             return [f"        {out_var}, _ = self.{node_id}({in_var}, {in_var}, {in_var})"]

@@ -218,7 +218,7 @@ class NNGraphCustomListener(NNGraphListener):
                     class start:
                         line   = info["line"]
                         column = 0
-                warn(f"Node '{node_id}' is declared but never referenced in any edge.", _FakeCtx)
+                error(f"Node '{node_id}' is declared but never referenced in any edge.", _FakeCtx)
 
     def _validate_residual_arity(self, ctx):
         in_edges = {}
@@ -284,7 +284,7 @@ class NNGraphCustomListener(NNGraphListener):
                     class start:
                         line   = info["line"]
                         column = 0
-                warn(f"Node '{node_id}' is not reachable from input '{self.input_id}'.", _FakeCtx)
+                error(f"Node '{node_id}' is not reachable from input '{self.input_id}'.", _FakeCtx)
 
         if self.output_id not in visited:
             error(

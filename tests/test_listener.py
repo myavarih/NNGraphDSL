@@ -207,15 +207,15 @@ def test_output_not_declared():
         """)
 
 
-# ── warning: orphan node does NOT raise (only warns) ─────────────────────────
+# ── error: orphan node (declared but never referenced in any edge) ────────────
 
-def test_orphan_node_does_not_raise():
-    l = _walk("""
-        model M { input x : tensor(1) output out }
-        graph {
-            node orphan : ReLU()
-            node out : ReLU()
-            edge x -> out
-        }
-    """)
-    assert "orphan" in l.nodes
+def test_orphan_node_raises():
+    with pytest.raises(SystemExit):
+        _walk("""
+            model M { input x : tensor(1) output out }
+            graph {
+                node orphan : ReLU()
+                node out : ReLU()
+                edge x -> out
+            }
+        """)
