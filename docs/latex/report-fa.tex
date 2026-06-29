@@ -43,7 +43,9 @@
 کامپایلر با \LR{ANTLR4} نسخه ۴.۱۳.۲ ساخته شده و از الگوی
 \LR{Listener} برای تحلیل معنایی و الگوریتم مرتب‌سازی توپولوژیک
 \LR{Kahn} هم در تحلیل‌گر معنایی (تشخیص دور) و هم در مولد کد
-(ترتیب اجرا) استفاده می‌کند.
+(ترتیب اجرا) استفاده می‌کند. استنتاج شکل تنسور، تجسم گراف با
+\LR{Graphviz}، داربست آموزش، حاشیه‌نویسی کوانتیزاسیون و صادرکردن
+\LR{ONNX} نیز پشتیبانی می‌شوند.
 
 مجموعه آزمایش شامل ۵۵ تست در چهار فایل است. چهار معماری
 نمونه---\LR{MLP}، \LR{ResBlock}، \LR{InceptionBlock} و
@@ -188,6 +190,10 @@ graph {
 config {
     batch_size = <int>
     device     = "cpu" | "cuda"
+    loss       = "<LossFn>"       // enables training scaffold
+    optimizer  = "<Optimizer>"    // Adam | SGD | AdamW | RMSprop
+    lr         = <float>          // learning rate
+    epochs     = <int>            // training epochs
 }
 \end{amzcode}
 \end{codebox}
@@ -206,7 +212,8 @@ config {
 \begin{dfnbox}{بلوک config}{block-config}
 بلوک \code{config} مقادیری را برای بلوک \code{\_\_main\_\_} کد
 تولیدشده تعیین می‌کند. \code{batch\_size} پیش‌فرض ۱ و \code{device}
-پیش‌فرض \code{'cpu'} است.
+پیش‌فرض \code{'cpu'} است. اگر کلید \code{loss} تنظیم شده باشد،
+مولد کد یک حلقه آموزش کامل با بهینه‌ساز و تابع خطا تولید می‌کند.
 \end{dfnbox}
 
 \section{گرامر}
@@ -318,10 +325,22 @@ shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
 \code{Add}      & ---                          & \code{out = a + b} \\
 \code{Concat}   & \code{dim: int}              & \code{out = torch.cat([a,b], dim=d)} \\
 \code{Residual} & ---                          & \code{out = main + shortcut} \\
-\code{Split}    & \code{chunks: int, dim: int} & \code{parts = torch.chunk(x,n,dim=d)} \\
+\code{Split}    & \code{chunks: int, dim: int} & \code{split\_0, split\_1, ... = torch.chunk(x,n,dim=d)} \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsection{پارامترهای سراسری}
+
+پارامتر \code{quant} روی هر گره بدون توجه به نوع لایه قابل
+استفاده است. مقادیر مجاز: \code{"dynamic"}، \code{"static"}،
+\code{"qat"}.
+
+\begin{codebox}{نمونه استفاده از کوانتیزاسیون}{code-quant-example}
+\begin{amzcode}{text}
+node fc1 : Linear(in_features=784, out_features=128, quant="dynamic")
+\end{amzcode}
+\end{codebox}
 
 \section{نحو یال}
 
@@ -427,16 +446,20 @@ if __name__ == '__main__':
 \section{معماری کامپایلر}
 
 \begin{dfnbox}{خط لوله کامپایل}{pipeline}
-کامپایلر چهار مرحله دارد:
+کامپایلر شش مرحله دارد:
 \begin{enumerate}
     \item \textbf{تجزیه}: \code{FileStream} $\to$ \code{NNGraphLexer}
     $\to$ \code{NNGraphParser.program()} $\to$ درخت تجزیه
     \item \textbf{تحلیل معنایی}: \code{ParseTreeWalker} +
     \code{NNGraphCustomListener} $\to$ مدل گراف
+    \item \textbf{مرتب‌سازی توپولوژیک}: محاسبه ترتیب اجرا با الگوریتم
+    \LR{Kahn}
+    \item \textbf{استنتاج شکل}: انتشار شکل تنسور در گراف و تشخیص
+    عدم تطابق ابعاد (اختیاری: \code{-{}-show-shapes})
     \item \textbf{تولید کد}: \code{CodeGenerator.generate()} $\to$
     رشته Python
-    \item \textbf{خروجی}: نوشتن به فایل \code{.py} یا چاپ در
-    \code{stdout}
+    \item \textbf{خروجی}: نوشتن به فایل \code{.py}، خروجی
+    \LR{Graphviz DOT}، یا صادرکردن \LR{ONNX}
 \end{enumerate}
 \end{dfnbox}
 
@@ -451,9 +474,12 @@ if __name__ == '__main__':
 \code{gen/NNGraphLexer.py}    & تولیدشده توسط ANTLR4 \\
 \code{gen/NNGraphParser.py}   & تولیدشده توسط ANTLR4 \\
 \code{gen/NNGraphListener.py} & listener پایه --- نباید ویرایش شود \\
-\code{custom\_listener.py}    & تحلیل معنایی (۲۹۳ خط) \\
-\code{code\_generator.py}     & تولید کد PyTorch (۲۳۹ خط) \\
-\code{main.py}                & رابط CLI و \code{compile\_nng()} (۷۳ خط) \\
+\code{custom\_listener.py}    & تحلیل معنایی \\
+\code{code\_generator.py}     & تولید کد PyTorch \\
+\code{shape\_inference.py}    & استنتاج شکل تنسور در کامپایل \\
+\code{graph\_viz.py}          & تولید نمودار Graphviz DOT \\
+\code{onnx\_export.py}        & صادرکردن مدل به فرمت ONNX \\
+\code{main.py}                & رابط CLI و \code{compile\_nng()} \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -506,7 +532,7 @@ def exitShape_expr(self, ctx):
 \begin{enumerate}
     \setcounter{enumi}{4}
     \item \textbf{گره خروجی اعلان‌نشده}: در \code{\_validate\_output\_declared}
-    \item \textbf{گره고립} (هشدار): در \code{\_validate\_orphans}
+    \item \textbf{گره یتیم}: در \code{\_validate\_orphans}
     \item \textbf{آریتی Residual != 2}: در \code{\_validate\_residual\_arity}
     \item \textbf{تشخیص دور با Kahn}: در \code{\_validate\_no\_cycles}
     \item \textbf{قابلیت دسترسی BFS}: در \code{\_validate\_reachability}
@@ -514,16 +540,16 @@ def exitShape_expr(self, ctx):
 
 \subsection{قالب پیام خطا}
 
-\begin{codebox}{قالب خطا و هشدار}{code-error-format}
+\begin{codebox}{قالب خطا}{code-error-format}
 \begin{amzcode}{text}
 [line L:C] SemanticError: <message>
-[line L] Warning: <message>
+[line L] ShapeError at '<node>': <message>
 \end{amzcode}
 \end{codebox}
 
 \code{L} شماره سطر (از ۱) و \code{C} ستون توکن (از ۰) است.
-هشدارها فقط در \code{stderr} چاپ می‌شوند و کامپایل را متوقف
-نمی‌کنند.
+تمام شرایط خطا کامپایل را متوقف می‌کنند و با کد خروج ۱ پایان
+می‌یابند.
 
 \subsection{\_FakeCtx برای خطاهای پس از پیمایش}
 
@@ -696,7 +722,7 @@ return x
 \LR{Residual}       & بدون ماژول   & \code{out = main + shortcut} \\
 \LR{Add}            & بدون ماژول   & \code{out = a + b} \\
 \LR{Concat}         & بدون ماژول   & \code{out = torch.cat([a,b], dim=d)} \\
-\LR{Split}          & بدون ماژول   & \code{parts = torch.chunk(x,n,dim=d)} \\
+\LR{Split}          & بدون ماژول   & \code{split\_0, split\_1, ... = torch.chunk(x,n,dim=d)} \\
 \LR{Residual ضمنی}  & \code{residual\_*} label & \code{out = self.norm(skip + main)} \\
 \bottomrule
 \end{tabular}
@@ -733,6 +759,67 @@ if __name__ == '__main__':
     model  = <ModelName>().to(device)
     x      = torch.randn(<batch_size>, <input_shape>).to(device)
     print(model(x).shape)
+\end{amzcode}
+\end{codebox}
+
+\section{استنتاج شکل}
+
+\begin{dfnbox}{Shape Inference}{shape-inference}
+ماژول \code{shape\_inference.py} شکل تنسور را از گره ورودی در
+امتداد مرتب‌سازی توپولوژیک انتشار می‌دهد. برای هر نوع لایه، قوانین
+خاصی اعمال می‌شود: \LR{Linear} بعد آخر را تغییر می‌دهد،
+\LR{Conv2d} ابعاد فضایی را محاسبه می‌کند، \LR{Flatten} ابعاد را
+ادغام می‌کند، و غیره.
+\end{dfnbox}
+
+در صورت عدم تطابق ابعاد، خطای \code{ShapeError} با شماره سطر اعلان
+گره گزارش می‌شود و کامپایل متوقف می‌شود. پرچم \code{-{}-show-shapes}
+شکل خروجی هر گره را نمایش می‌دهد.
+
+\section{تجسم Graphviz}
+
+ماژول \code{graph\_viz.py} خروجی \LR{Graphviz DOT} تولید می‌کند.
+گره‌ها بر اساس نوع لایه رنگ‌بندی می‌شوند (سبز برای ورودی، آبی
+برای \LR{Linear}، نارنجی برای \LR{Conv}، بنفش برای
+\LR{Normalization}). گره خروجی با \code{peripheries=2} مشخص می‌شود
+و یال‌های برچسب‌دار با خط‌چین نمایش داده می‌شوند. اگر استنتاج شکل
+فعال باشد، شکل‌ها روی گره‌ها نوشته می‌شوند.
+
+\begin{codebox}{تولید و رندر نمودار}{code-graphviz}
+\begin{amzcode}{bash}
+python main.py -i input/inception.nng --graph-viz output/inception.dot
+dot -Tpng output/inception.dot -o output/inception.png
+\end{amzcode}
+\end{codebox}
+
+\section{داربست آموزش}
+
+اگر کلید \code{loss} در بلوک \code{config} تنظیم شده باشد، مولد
+کد یک حلقه آموزش کامل شامل تابع خطا، بهینه‌ساز، و حلقه اپوک
+تولید می‌کند. توابع خطا پشتیبانی‌شده:
+\code{CrossEntropyLoss}، \code{MSELoss}، \code{BCELoss}،
+\code{BCEWithLogitsLoss}، \code{L1Loss}، \code{NLLLoss}،
+\code{SmoothL1Loss}. بهینه‌سازهای پشتیبانی‌شده:
+\code{Adam}، \code{SGD}، \code{AdamW}، \code{RMSprop}.
+
+\section{حاشیه‌نویسی کوانتیزاسیون}
+
+پارامتر سراسری \code{quant} روی هر گره قابل استفاده است.
+سه حالت پشتیبانی می‌شود: \code{"dynamic"}، \code{"static"} و
+\code{"qat"}. گره‌های \LR{QAT} در \code{torch.quantization.QuantWrapper}
+بسته‌بندی می‌شوند. وقتی حداقل یک گره حاشیه‌نویسی کوانتیزاسیون
+داشته باشد، \code{QuantStub} و \code{DeQuantStub} در
+\code{\_\_init\_\_} و \code{forward} اضافه می‌شوند.
+
+\section{صادرکردن ONNX}
+
+ماژول \code{onnx\_export.py} کد تولیدشده را نمونه‌سازی کرده و با
+\code{torch.onnx.export} یک فایل \code{.onnx} با محور دسته‌ای پویا
+و \LR{opset 17} تولید می‌کند.
+
+\begin{codebox}{صادرکردن مدل به ONNX}{code-onnx}
+\begin{amzcode}{bash}
+python main.py -i input/mlp.nng --onnx output/mlp.onnx
 \end{amzcode}
 \end{codebox}
 
@@ -832,13 +919,16 @@ python -m pytest tests/ -v
 \textbf{فایل/دایرکتوری} & \textbf{خطوط} \\
 \midrule
 \code{NNGraph.g4}                    & ۵۶ \\
-\code{custom\_listener.py}           & ۲۹۳ \\
-\code{code\_generator.py}            & ۲۳۹ \\
-\code{main.py}                       & ۷۳ \\
+\code{custom\_listener.py}           & ۳۰۳ \\
+\code{code\_generator.py}            & ۳۲۷ \\
+\code{shape\_inference.py}           & ۱۹۳ \\
+\code{graph\_viz.py}                 & ۹۰ \\
+\code{onnx\_export.py}              & ۴۷ \\
+\code{main.py}                       & ۱۲۱ \\
 \code{tests/} (۴ فایل)              & ۵۷۵ \\
 \code{required\_code\_collection/}   & $\approx$۱۰۰ \\
 \midrule
-\textbf{جمع}                         & $\approx$۱۳۳۶ \\
+\textbf{جمع}                         & $\approx$۱۸۱۲ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -883,12 +973,28 @@ python -m pytest tests/ -v
 
 \section{نتیجه‌گیری}
 
-\LR{NNGraph DSL} یک زنجیره کامپایلر چهار مرحله‌ای از \code{.nng} به
+\LR{NNGraph DSL} یک زنجیره کامپایلر شش مرحله‌ای از \code{.nng} به
 \code{nn.Module} قابل اجرا ارائه می‌دهد. کامپایلر گرامر \LR{ANTLR4}
 با ۱۴ قانون تجزیه‌گر، ۲۴ نوع لایه، ۸ قانون اعتبارسنجی، و
 الگوریتم تخصیص متغیر که شاخه‌بندی پیچیده را بدون بازنویسی تنسور
 مدیریت می‌کند را ارائه می‌دهد. کامپایلر با ۵۵ تست در چهار معماری
 نمونه اعتبارسنجی شده است.
+
+\section{قابلیت‌های پیاده‌سازی‌شده}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{قابلیت} & \textbf{توضیح} \\
+\midrule
+استنتاج شکل        & انتشار شکل تنسور و تشخیص عدم تطابق در کامپایل (\code{-{}-show-shapes}) \\
+تجسم Graphviz       & خروجی نمودار گراف مدل به فرمت DOT (\code{-{}-graph-viz}) \\
+داربست آموزش        & تولید حلقه آموزش با بهینه‌ساز و تابع خطا از بلوک \code{config} \\
+کوانتیزاسیون        & متادیتا \code{quant} برای تبدیل مدل به نسخه‌های کوانتیزه \\
+صادرکردن ONNX       & صادرکردن مدل به فرمت ONNX (\code{-{}-onnx}) \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \section{کارهای آینده}
 
@@ -897,13 +1003,8 @@ python -m pytest tests/ -v
 \toprule
 \textbf{قابلیت} & \textbf{توضیح} \\
 \midrule
-استنتاج شکل        & انتشار شکل تنسور و تشخیص عدم تطابق در کامپایل \\
-صادرکردن ONNX       & تولید گراف سازگار با ONNX به جای Python \\
-داربست آموزش        & تولید حلقه آموزش با بهینه‌ساز و تابع خطا از \code{config} \\
-تجسم Graphviz       & خروجی نمودار گراف مدل \\
 زیرگراف‌های نام‌دار  & بلوک‌های ماکرو قابل استفاده مجدد \\
 کنترل جریان پویا   & شاخه‌های \code{if}/\code{else} درون \code{forward} \\
-کوانتیزاسیون        & متادیتا برای تبدیل مدل به نسخه‌های کوانتیزه \\
 \bottomrule
 \end{tabular}
 \end{center}
