@@ -159,6 +159,46 @@ project are used directly:
     visualization
 \end{itemize}
 
+\subsection{Why AST Is Not Used Here}
+
+Most traditional compilers represent programs as abstract syntax trees
+(ASTs). Expression-based languages---where operators have precedence
+and scopes nest hierarchically---naturally map to tree structures.
+
+NNGraph DSL, however, describes neural network architectures as
+\emph{directed acyclic graphs} (DAGs). Nodes represent layer operations;
+edges represent tensor flow. The graph structure is the domain model,
+not the parse tree.
+
+The compiler performs multiple graph-based operations that require
+adjacency lists and explicit edge relationships:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Topological sort} (Kahn's algorithm) for execution
+    ordering in \code{forward()}
+    \item \textbf{Cycle detection} via topological sort (DAG validation)
+    \item \textbf{Reachability analysis} via BFS from input to output
+    \item \textbf{Residual connection validation} (checking in-degree
+    of merge nodes)
+    \item \textbf{Shape inference} by propagating tensor shapes along
+    edges
+    \item \textbf{Graphviz DOT export} for architecture visualization
+    \item \textbf{ONNX export} (ONNX uses a graph format)
+\end{itemize}
+
+An AST would encode the parse tree hierarchy (\code{model\_block},
+\code{graph\_block}, \code{node\_decl}), but it would obscure the
+computational graph that the language is designed to express. For this
+reason, the semantic analyzer stores nodes and edges directly in
+dictionaries and lists---the natural representation for graph algorithms.
+
+\begin{notebox}
+The AST construction code (\code{exitEveryRule}, \code{exitStart})
+remains in \code{custom\_listener.py} for optional debugging
+visualization via \code{-{}-show-ast}. It is not used during
+compilation.
+\end{notebox}
+
 % ================================================================
 \chapter{Language Design}
 
@@ -561,6 +601,170 @@ class _FakeCtx:
         column = 0
 \end{amzcode}
 \end{codebox}
+
+\subsection{Listener Execution Flow}
+
+The \code{ParseTreeWalker.walk(listener, parse\_tree)} method performs
+a depth-first traversal of the parse tree. For each node, it calls
+\code{enterX(ctx)} before visiting children and \code{exitX(ctx)}
+after all children have been visited.
+
+\begin{dfnbox}{Walker invocation in main.py}{walker-invoke}
+\begin{amzcode}{python}
+listener = NNGraphCustomListener()
+listener.rule_names = parser.ruleNames
+walker = ParseTreeWalker()
+walker.walk(listener, parse_tree)
+\end{amzcode}
+\end{dfnbox}
+
+The custom listener overrides only \code{exit*} methods. All
+\code{enter*} methods remain as no-ops from the base
+\code{NNGraphListener} class.
+
+\subsubsection{Attribute Propagation (Bottom-Up)}
+
+Values flow upward through the tree via context attributes:
+
+\begin{codebox}{exitValue stores parsed value in ctx.pvalue}{code-exitvalue}
+\begin{amzcode}{python}
+def exitValue(self, ctx):
+    if ctx.FLOAT_LITERAL():
+        ctx.pvalue = float(ctx.FLOAT_LITERAL().getText())
+        ctx.ptype  = float
+    elif ctx.INT_LITERAL():
+        ctx.pvalue = int(ctx.INT_LITERAL().getText())
+        ctx.ptype  = int
+    elif ctx.BOOL_LITERAL():
+        ctx.pvalue = ctx.BOOL_LITERAL().getText() == 'true'
+        ctx.ptype  = bool
+    # ... other cases
+\end{amzcode}
+\end{codebox}
+
+Parent rules read child attributes:
+
+\begin{codebox}{exitParam reads ctx.value().pvalue from child}{code-exitparam}
+\begin{amzcode}{python}
+def exitParam(self, ctx):
+    ctx.param_name  = ctx.ID().getText()
+    ctx.param_value = ctx.value().pvalue
+    ctx.param_type  = ctx.value().ptype
+\end{amzcode}
+\end{codebox}
+
+\subsubsection{Semantic Extraction and Detailed Method Behavior}
+
+The custom listener relies on a set of \code{exit*} methods to process the parse tree bottom-up. Below is the detailed explanation of how all listener functions operate:
+
+\begin{itemize}
+    \item \textbf{\code{exitShape\_expr(ctx)}}: Parses list of dimensions from \code{INT\_LITERAL} tokens. It builds a Python \code{tuple} and binds it to \code{ctx.pvalue}, setting \code{ctx.ptype} to \code{tuple}.
+    \item \textbf{\code{exitValue(ctx)}}: Evaluates literal values (\code{FLOAT\_LITERAL}, \code{INT\_LITERAL}, \code{BOOL\_LITERAL}, \code{STRING}, \code{NONE}, or nested \code{shape\_expr}). It converts the matched text into its corresponding Python representation, attaching the result to \code{ctx.pvalue} and the type to \code{ctx.ptype}.
+    \item \textbf{\code{exitModel\_block(ctx)}}: Extracts the neural network model identifier via \code{ctx.ID().getText()} and stores it in \code{self.model\_name}.
+    \item \textbf{\code{exitInput\_decl(ctx)}}: Stores the input variable identifier in \code{self.input\_id} and propagates the parsed shape to \code{self.input\_shape}. Additionally, it populates \code{self.nodes} with a pseudo-node of type \code{"\_\_input\_\_"} at the current line number, enabling downstream edge verification to validate connections from the input.
+    \item \textbf{\code{exitOutput\_decl(ctx)}}: Saves the output variable identifier in \code{self.output\_id} to track the network's terminal node.
+    \item \textbf{\code{exitParam(ctx)}}: Processes key-value parameter configurations. It maps the parameter identifier to \code{ctx.param\_name}, and associates the evaluated values and types to \code{ctx.param\_value} and \code{ctx.param\_type} respectively.
+    \item \textbf{\code{exitLayer\_expr(ctx)}}: Processes layer constructor configurations. It identifies the layer class name from the ID and constructs a dictionary mapping parameter names to their parsed metadata. The dictionary is attached to \code{ctx.params}.
+    \item \textbf{\code{exitNode\_decl(ctx)}}: Registers nodes and validates structural constraints. It ensures that the node identifier has not been previously declared. It matches the layer type against \code{LAYER\_SCHEMA}, verifies that every declared parameter matches the schema specifications (types and formats), validates that optional quantization annotations (\code{quant}) use a valid mode, and registers the validated node into \code{self.nodes}.
+    \item \textbf{\code{exitEdge\_decl(ctx)}}: Processes connections between nodes. It extracts the source and destination identifiers, validates that both endpoints exist in \code{self.nodes}, checks for optional label annotations (e.g., \code{"shortcut"} or \code{"residual\_*"}), and registers the edge in \code{self.edges}.
+    \item \textbf{\code{exitConfig\_entry(ctx)}}: Extracts compiler configuration overrides (such as target \code{device} or \code{batch\_size}) and populates the \code{self.config} dictionary.
+    \item \textbf{\code{exitGraph\_block(ctx)}}: Triggers after the graph block has been fully walked. It runs five sequential validation procedures: ensuring the output node is declared, verifying that no nodes are orphaned, checking residual input arity, verifying the absence of directed cycles, and validating path reachability from input to output.
+    \item \textbf{\code{exitEveryRule(ctx)}}: Intercepts all rule exits. If rule names are loaded, it invokes \code{make\_ast\_subtree} to build and merge abstract syntax tree nodes bottom-up.
+    \item \textbf{\code{exitStart(ctx)}}: Finalizes AST construction, binding the complete AST hierarchy under the root rule to the listener's AST collector.
+\end{itemize}
+
+\subsubsection{Graph Validation Algorithms}
+
+\code{exitGraph\_block} runs five validation passes after the graph
+is fully constructed:
+
+\textbf{1. Orphan Detection} (\code{\_validate\_orphans}):
+
+\begin{codebox}{Orphan detection algorithm}{code-orphan}
+\begin{amzcode}{python}
+referenced = set()
+for e in self.edges:
+    referenced.add(e["src"])
+    referenced.add(e["dst"])
+for node_id, info in self.nodes.items():
+    if info["type"] == "__input__":
+        continue
+    if node_id not in referenced:
+        error(f"Node '{node_id}' is declared but never referenced.")
+\end{amzcode}
+\end{codebox}
+
+Collects all node IDs appearing in edges. Any declared node (except
+input) not in this set is orphaned---declared but never connected.
+
+\textbf{2. Cycle Detection} (\code{\_validate\_no\_cycles}):
+
+Uses Kahn's topological sort algorithm. A DAG can be fully sorted;
+if any nodes remain with \code{in\_degree > 0} after processing,
+a cycle exists.
+
+\begin{codebox}{Kahn's algorithm for cycle detection}{code-kahn}
+\begin{amzcode}{python}
+in_degree = dict.fromkeys(self.nodes, 0)
+adj       = {n: [] for n in self.nodes}
+for e in self.edges:
+    adj[e["src"]].append(e["dst"])
+    in_degree[e["dst"]] += 1
+
+queue   = deque(n for n, d in in_degree.items() if d == 0)
+visited = 0
+while queue:
+    node = queue.popleft()
+    visited += 1
+    for nxt in adj[node]:
+        in_degree[nxt] -= 1
+        if in_degree[nxt] == 0:
+            queue.append(nxt)
+
+if visited != len(self.nodes):
+    remaining = [n for n, d in in_degree.items() if d > 0]
+    error(f"Cycle detected involving nodes: {remaining}.")
+\end{amzcode}
+\end{codebox}
+
+\textbf{3. Reachability Analysis} (\code{\_validate\_reachability}):
+
+Performs BFS from the input node. Every declared node and the output
+node must be reachable.
+
+\begin{codebox}{BFS reachability check}{code-bfs}
+\begin{amzcode}{python}
+adj = {n: [] for n in self.nodes}
+for e in self.edges:
+    adj[e["src"]].append(e["dst"])
+
+visited = set()
+queue   = deque([self.input_id])
+while queue:
+    node = queue.popleft()
+    if node in visited:
+        continue
+    visited.add(node)
+    for nxt in adj[node]:
+        queue.append(nxt)
+
+for node_id, info in self.nodes.items():
+    if node_id not in visited and info["type"] != "__input__":
+        error(f"Node '{node_id}' is not reachable from input.")
+
+if self.output_id not in visited:
+    error(f"Output node '{self.output_id}' is not reachable.")
+\end{amzcode}
+\end{codebox}
+
+Catches disconnected subgraphs and broken input-to-output paths.
+
+\begin{notebox}
+Cycle detection and reachability are independent checks. A graph can
+be acyclic yet fail reachability (disconnected components), or be
+connected yet contain cycles. Both properties are required for a
+valid neural network DAG.
+\end{notebox}
 
 \section{Code Generator}
 

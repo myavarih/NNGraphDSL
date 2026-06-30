@@ -43,12 +43,6 @@ def error(msg, ctx):
     print(f"[line {line}:{col}] SemanticError: {msg}", file=sys.stderr)
     raise SystemExit(1)
 
-
-def warn(msg, ctx):
-    line = ctx.start.line
-    print(f"[line {line}] Warning: {msg}", file=sys.stderr)
-
-
 class NNGraphCustomListener(NNGraphListener):
 
     def __init__(self):
@@ -250,7 +244,7 @@ class NNGraphCustomListener(NNGraphListener):
                     )
 
     def _validate_no_cycles(self, ctx):
-        in_degree = {n: 0 for n in self.nodes}
+        in_degree = dict.fromkeys(self.nodes, 0)
         adj       = {n: [] for n in self.nodes}
         for e in self.edges:
             adj[e["src"]].append(e["dst"])
