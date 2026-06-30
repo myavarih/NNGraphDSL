@@ -28,5 +28,20 @@ class ResBlock(nn.Module):
 if __name__ == '__main__':
     device = torch.device('cpu')
     model = ResBlock().to(device)
-    x = torch.randn(1, 64, 32, 32).to(device)
+    x = torch.randn(32, 64, 32, 32).to(device)
     print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
+
+    # Training loop
+    model.train()
+    for epoch in range(3):
+        x = torch.randn(32, 64, 32, 32).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/3, Loss: {loss.item():.4f}')

@@ -115,3 +115,13 @@ def test_check_only_no_file_written(tmp_path):
 def test_bad_input_exits():
     with pytest.raises((SystemExit, Exception)):
         compile_nng("/nonexistent/path.nng")
+
+
+# ── Quantization ──────────────────────────────────────────────────────────────
+
+def test_quant_mlp_forward_shape():
+    model = _load_model("quant_mlp", "QuantMLP")
+    x     = torch.randn(4, 784)
+    out   = model(x)
+    assert out.shape == (4, 10)
+

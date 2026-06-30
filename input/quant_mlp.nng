@@ -1,0 +1,25 @@
+model QuantMLP {
+    input x : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=128, quant="qat")
+    node relu1 : ReLU()
+    node fc2   : Linear(in_features=128, out_features=10, quant="qat")
+    node out   : Softmax(dim=1)
+
+    edge x -> fc1
+    edge fc1 -> relu1
+    edge relu1 -> fc2
+    edge fc2 -> out
+}
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "NLLLoss"
+    optimizer = "Adam"
+    lr = 0.001
+    epochs = 2
+}

@@ -276,10 +276,10 @@ class CodeGenerator:
             f"    x = torch.randn({shape_str}).to(device)",
             f"    print(model(x).shape)",
         ]
-        parts.extend(self._emit_training(device, shape_str))
+        parts.extend(self._emit_training(shape_str))
         return "\n".join(parts) + "\n"
 
-    def _emit_training(self, device, shape_str):
+    def _emit_training(self, shape_str):
         loss_fn = self.config.get("loss")
         if not loss_fn:
             return []

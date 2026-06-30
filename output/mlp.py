@@ -29,3 +29,18 @@ if __name__ == '__main__':
     model = MLP().to(device)
     x = torch.randn(64, 784).to(device)
     print(model(x).shape)
+
+    criterion = nn.NLLLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    model.train()
+    for epoch in range(5):
+        x = torch.randn(64, 784).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/5, Loss: {loss.item():.4f}')

@@ -42,9 +42,7 @@ PyTorch 2.10 (`nn.Module` subclass with `__init__` and `forward`).
 **Listener pattern vs visitor pattern:**
 ANTLR4 supports two tree-walking patterns. This compiler uses the Listener pattern:
 `ParseTreeWalker` calls `enter*`/`exit*` methods automatically as it traverses the
-tree. The EVM ANTLR project in `PycharmProjects/Antlr` uses the same pattern, and
-this project follows the same code structure (`custom_listener.py` mirrors
-`evm/custom_listener.py`).
+tree.
 
 **PyTorch `nn.Module`:**
 The generated code subclasses `nn.Module`. Every parameterized layer becomes an
@@ -154,7 +152,7 @@ Key `exit*` methods:
 - `exitEdge_decl` — validates src/dst exist in `self.nodes`
 - `exitGraph_block` — runs 5 post-graph validation passes
 
-Error format (mirrors EVM project):
+Error format:
 ```
 [line L:C] SemanticError: <message>
 ```
@@ -310,10 +308,7 @@ The listener pattern is stateful by design; `exit*` methods accumulate into
 values through the tree, which adds friction for this use case.
 
 **`CodeGenerator.load_from_listener()` instead of `generate(traversal)`:**
-The EVM project in `PycharmProjects/Antlr` passes a flat post-order AST traversal
-to `CodeGenerator.generate(traversal)` because it generates stack-based bytecode.
-For a graph compiler, the natural input is the graph structure (nodes + edges), not
-a linear token stream. Passing the listener directly is cleaner.
+Some linear compilers pass a flat post-order AST traversal to `CodeGenerator.generate(traversal)` because they generate stack-based bytecode. For a graph compiler, the natural input is the graph structure (nodes + edges), not a linear token stream. Passing the listener directly is cleaner.
 
 **Variable naming `node_id` over single letters:**
 The spec examples use `a`, `b`, `identity`, `attn_out`, `ff_out`. This compiler

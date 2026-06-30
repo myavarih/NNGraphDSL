@@ -152,11 +152,9 @@ class ResBlock(nn.Module):
 از درخت تجزیه طبیعی‌تر است.
 \end{notebox}
 
-\section{پروژه EVM ANTLR}
+\section{ابزارها و تجسم‌سازهای AST}
 
-این کامپایلر سبک و ساختار کد را از پروژه \LR{EVM} موجود در
-\code{PycharmProjects/Antlr} به ارث می‌برد. سه فایل از آن پروژه
-مستقیماً استفاده می‌شوند:
+این کامپایلر از ابزارهای استاندارد درخت نحو انتزاعی (\LR{AST}) برای بازرسی اختیاری و تجسم استفاده می‌کند. سه فایل برای این منظور به کار می‌روند:
 
 \begin{itemize}
     \item \code{ast.py} --- کلاس \code{AST} و \code{TreeNode}
@@ -325,7 +323,7 @@ shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
 \code{self.<id> = nn.X(...)} تولید می‌شوند.
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{کلیدواژه DSL} & \textbf{کلاس PyTorch} & \textbf{پارامترهای اصلی} \\
 \midrule
@@ -357,7 +355,7 @@ shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
 این انواع در \code{\_\_init\_\_} خطی تولید نمی‌کنند:
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{کلیدواژه} & \textbf{پارامترها} & \textbf{کد تولیدشده} \\
 \midrule
@@ -552,8 +550,7 @@ def exitShape_expr(self, ctx):
 \end{codebox}
 
 این رویکرد تضمین می‌کند که هر \LR{context} پس از خروج از آن، مقادیر
-فرزندانش را در دسترس دارد---الگویی که در پروژه \LR{EVM} مرجع نیز
-استفاده شده است.
+فرزندانش را در دسترس دارد.
 
 \subsection{قوانین اعتبارسنجی}
 
@@ -902,7 +899,7 @@ return x
 \subsection{موارد خاص تولید کد}
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{الگو} & \textbf{شرط} & \textbf{کد تولیدشده} \\
 \midrule
@@ -1141,8 +1138,8 @@ python -m pytest tests/ -v
 
 \section{load\_from\_listener() در برابر generate(traversal)}
 
-پروژه \LR{EVM} مرجع از \code{CodeGenerator.generate(traversal)} استفاده
-می‌کند که یک لیست توکن پس‌ترتیب دریافت می‌کند---مناسب برای تولید
+برخی کامپایلرها از \code{CodeGenerator.generate(traversal)} استفاده
+می‌کنند که یک لیست توکن پس‌ترتیب دریافت می‌کند---مناسب برای تولید
 بایت‌کد پشته‌ای. برای کامپایلر گراف، ورودی طبیعی ساختار گراف
 (گره‌ها + یال‌ها) است نه جریان خطی توکن. پس
 \code{load\_from\_listener(listener)} مستقیم‌تر است.
@@ -1172,7 +1169,7 @@ python -m pytest tests/ -v
 \section{قابلیت‌های پیاده‌سازی‌شده}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{lp{10cm}}
 \toprule
 \textbf{قابلیت} & \textbf{توضیح} \\
 \midrule
@@ -1188,7 +1185,7 @@ python -m pytest tests/ -v
 \section{کارهای آینده}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{lp{10cm}}
 \toprule
 \textbf{قابلیت} & \textbf{توضیح} \\
 \midrule

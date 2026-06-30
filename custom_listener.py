@@ -187,7 +187,7 @@ class NNGraphCustomListener(NNGraphListener):
         self._validate_no_cycles(ctx)
         self._validate_reachability(ctx)
 
-    # ── AST construction (same contract as EVM) ────────────────
+    # ── AST construction ────────────────
 
     def exitEveryRule(self, ctx):
         if not self.rule_names:

@@ -23,3 +23,12 @@ graph {
     edge skip -> relu2
     edge relu2 -> out
 }
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "MSELoss"
+    optimizer = "AdamW"
+    lr = 0.0005
+    epochs = 3
+}

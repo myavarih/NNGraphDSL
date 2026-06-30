@@ -38,9 +38,9 @@ Entry point: `compile_nng()` in `main.py:14`.
 | `custom_listener.py` | Semantic analysis. Subclasses `NNGraphListener`. All logic lives here. |
 | `code_generator.py` | PyTorch code emission. Reads from listener state; no ANTLR dependency. |
 | `main.py` | CLI and `compile_nng()` API. Wires the four stages together. |
-| `required_code_collection/ast.py` | `AST` class and `TreeNode`. Copied verbatim from EVM ANTLR project. |
-| `required_code_collection/make_ast_subtree.py` | Collapses parse tree nodes into AST. Copied verbatim from EVM project. |
-| `required_code_collection/ast_to_networkx_graph.py` | Optional graphviz visualization. Copied verbatim from EVM project. |
+| `required_code_collection/ast.py` | `AST` class and `TreeNode` representation. |
+| `required_code_collection/make_ast_subtree.py` | Collapses parse tree nodes into AST. |
+| `required_code_collection/ast_to_networkx_graph.py` | Optional graphviz visualization utilities. |
 
 ---
 
@@ -93,8 +93,7 @@ methods are called automatically without any return values needed.
 
 This suits the use case because the listener accumulates state into `self.nodes`
 and `self.edges` across many rule exits, rather than computing a return value
-per subtree. The EVM ANTLR project in `PycharmProjects/Antlr` uses the same
-pattern.
+per subtree.
 
 ---
 
@@ -135,16 +134,13 @@ node's original declaration, keeping the error format consistent.
 
 ---
 
-## Relationship to EVM ANTLR project
+## AST helper utilities
 
-`required_code_collection/` contains three files copied verbatim from
-`/home/emmwhy/PycharmProjects/Antlr/`:
+`required_code_collection/` contains helper utilities for building and managing the AST:
 
 - `ast.py` — `AST`, `TreeNode`, `traverse_ast`, `make_node`
 - `make_ast_subtree.py` — collapses/bubbles parse tree nodes based on child count
 - `ast_to_networkx_graph.py` — graphviz visualization via `show_ast()`
 
-The `exitEveryRule` and `exitProgram` methods in `custom_listener.py` call
-`make_ast_subtree()` using the same contract as the EVM project. The AST is
-constructed but not used by the code generator; it is available for inspection
-or visualization.
+The `exitEveryRule` and `exitStart` methods in `custom_listener.py` call
+`make_ast_subtree()` to construct the AST. The AST is constructed but not used by the code generator; it is available for inspection or visualization.

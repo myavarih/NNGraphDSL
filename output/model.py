@@ -2,30 +2,46 @@ import torch
 import torch.nn as nn
 
 
-class MLP(nn.Module):
+class ResBlock(nn.Module):
     def __init__(self):
-        super(MLP, self).__init__()
-        self.fc1 = nn.Linear(in_features=784, out_features=256)
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(num_features=64)
         self.relu1 = nn.ReLU()
-        self.drop1 = nn.Dropout(p=0.3)
-        self.fc2 = nn.Linear(in_features=256, out_features=128)
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(num_features=64)
         self.relu2 = nn.ReLU()
-        self.fc3 = nn.Linear(in_features=128, out_features=10)
-        self.out = nn.Softmax(dim=1)
+        self.out = nn.Flatten()
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu1(x)
-        x = self.drop1(x)
-        x = self.fc2(x)
+        conv1 = self.conv1(x)
+        conv1 = self.bn1(conv1)
+        conv1 = self.relu1(conv1)
+        conv1 = self.conv2(conv1)
+        conv1 = self.bn2(conv1)
+        x = conv1 + x
         x = self.relu2(x)
-        x = self.fc3(x)
         x = self.out(x)
         return x
 
 
 if __name__ == '__main__':
-    device = torch.device('cuda')
-    model = MLP().to(device)
-    x = torch.randn(64, 784).to(device)
+    device = torch.device('cpu')
+    model = ResBlock().to(device)
+    x = torch.randn(32, 64, 32, 32).to(device)
     print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
+
+    # Training loop
+    model.train()
+    for epoch in range(3):
+        x = torch.randn(32, 64, 32, 32).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/3, Loss: {loss.item():.4f}')

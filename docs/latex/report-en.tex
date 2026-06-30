@@ -146,11 +146,9 @@ and \code{self.edges}---this approach is more natural for building
 a graph model from a parse tree.
 \end{notebox}
 
-\section{EVM ANTLR Project}
+\section{AST Utilities and Visualizations}
 
-This compiler inherits its code style and structure from an existing
-EVM project in \code{PycharmProjects/Antlr}. Three files from that
-project are used directly:
+This compiler incorporates abstract syntax tree (AST) utilities to support optional structure inspections and visualizations. Three helper files are used:
 
 \begin{itemize}
     \item \code{ast.py} --- \code{AST} and \code{TreeNode} classes
@@ -322,7 +320,7 @@ These layers generate a \code{self.<id> = nn.X(...)} line in
 \code{\_\_init\_\_}.
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{DSL Keyword} & \textbf{PyTorch Class} & \textbf{Key Parameters} \\
 \midrule
@@ -354,7 +352,7 @@ These layers generate a \code{self.<id> = nn.X(...)} line in
 These types do not generate a line in \code{\_\_init\_\_}:
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{Keyword} & \textbf{Parameters} & \textbf{Generated Code} \\
 \midrule
@@ -546,8 +544,7 @@ def exitShape_expr(self, ctx):
 \end{codebox}
 
 This approach ensures that each context, after exiting, has its
-children's values available---a pattern also used in the reference
-EVM project.
+children's values available.
 
 \subsection{Validation Rules}
 
@@ -917,7 +914,7 @@ return x
 \subsection{Special Code Generation Cases}
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llp{7.5cm}}
 \toprule
 \textbf{Pattern} & \textbf{Condition} & \textbf{Generated Code} \\
 \midrule
@@ -1159,7 +1156,7 @@ tree.
 
 \section{load\_from\_listener() vs.\ generate(traversal)}
 
-The reference EVM project uses
+Some compilers use
 \code{CodeGenerator.generate(traversal)}, which receives a
 post-order token list---suited for stack-based bytecode generation.
 For a graph compiler, the natural input is graph structure
@@ -1193,7 +1190,7 @@ tests across four example architectures.
 \section{Implemented Features}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{lp{10cm}}
 \toprule
 \textbf{Feature} & \textbf{Description} \\
 \midrule
@@ -1209,7 +1206,7 @@ ONNX export            & Model export to ONNX format (\code{-{}-onnx}) \\
 \section{Future Work}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{lp{10cm}}
 \toprule
 \textbf{Feature} & \textbf{Description} \\
 \midrule
