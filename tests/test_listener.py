@@ -22,7 +22,7 @@ def _walk(source: str):
         stream   = FileStream(path, encoding="utf8")
         lexer    = NNGraphLexer(stream)
         parser   = NNGraphParser(CommonTokenStream(lexer))
-        tree     = parser.program()
+        tree     = parser.start()
         listener = NNGraphCustomListener()
         listener.rule_names = parser.ruleNames
         ParseTreeWalker().walk(listener, tree)

@@ -1,8 +1,6 @@
 grammar NNGraph;
 
-// ── Parser Rules ──────────────────────────────────────────────
-
-program: model_block graph_block config_block? EOF;
+start: model_block graph_block config_block? EOF;
 
 model_block: MODEL ID '{' input_decl output_decl '}';
 input_decl:  INPUT ID ':' TENSOR shape_expr;
@@ -28,8 +26,6 @@ value:      FLOAT_LITERAL
           | shape_expr;
 
 shape_expr: '(' INT_LITERAL (',' INT_LITERAL)* ')';
-
-// ── Lexer Tokens ──────────────────────────────────────────────
 
 MODEL:   'model';
 GRAPH:   'graph';

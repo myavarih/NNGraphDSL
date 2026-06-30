@@ -201,9 +201,9 @@ class NNGraphCustomListener(NNGraphListener):
         rule_name = self.rule_names[ctx.getRuleIndex()]
         make_ast_subtree(self.ast, ctx, rule_name)
 
-    def exitProgram(self, ctx: NNGraphParser.ProgramContext):
+    def exitStart(self, ctx: NNGraphParser.StartContext):
         if self.rule_names:
-            make_ast_subtree(self.ast, ctx, "program", keep_node=True)
+            make_ast_subtree(self.ast, ctx, "start", keep_node=True)
 
     # ── validation passes ──────────────────────────────────────
 

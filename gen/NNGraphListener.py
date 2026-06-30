@@ -8,12 +8,12 @@ else:
 # This class defines a complete listener for a parse tree produced by NNGraphParser.
 class NNGraphListener(ParseTreeListener):
 
-    # Enter a parse tree produced by NNGraphParser#program.
-    def enterProgram(self, ctx:NNGraphParser.ProgramContext):
+    # Enter a parse tree produced by NNGraphParser#start.
+    def enterStart(self, ctx:NNGraphParser.StartContext):
         pass
 
-    # Exit a parse tree produced by NNGraphParser#program.
-    def exitProgram(self, ctx:NNGraphParser.ProgramContext):
+    # Exit a parse tree produced by NNGraphParser#start.
+    def exitStart(self, ctx:NNGraphParser.StartContext):
         pass
 
 

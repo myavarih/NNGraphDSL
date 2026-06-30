@@ -16,7 +16,7 @@ def _parse(path):
     stream = FileStream(path, encoding="utf8")
     lexer  = NNGraphLexer(stream)
     parser = NNGraphParser(CommonTokenStream(lexer))
-    tree   = parser.program()
+    tree   = parser.start()
     return parser, tree
 
 

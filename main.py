@@ -38,7 +38,7 @@ def compile_nng(
     token_stream = CommonTokenStream(lexer)
 
     parser = NNGraphParser(token_stream)
-    parse_tree = parser.program()
+    parse_tree = parser.start()
 
     if parser.getNumberOfSyntaxErrors() > 0:
         print(

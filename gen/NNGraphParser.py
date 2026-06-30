@@ -76,7 +76,7 @@ class NNGraphParser ( Parser ):
                       "INT_LITERAL", "STRING", "ID", "WS", "NEWLINE", "LINE_COMMENT", 
                       "BLOCK_COMMENT" ]
 
-    RULE_program = 0
+    RULE_start = 0
     RULE_model_block = 1
     RULE_input_decl = 2
     RULE_output_decl = 3
@@ -91,7 +91,7 @@ class NNGraphParser ( Parser ):
     RULE_value = 12
     RULE_shape_expr = 13
 
-    ruleNames =  [ "program", "model_block", "input_decl", "output_decl", 
+    ruleNames =  [ "start", "model_block", "input_decl", "output_decl", 
                    "graph_block", "node_decl", "layer_expr", "param_list", 
                    "param", "edge_decl", "config_block", "config_entry", 
                    "value", "shape_expr" ]
@@ -136,7 +136,7 @@ class NNGraphParser ( Parser ):
 
 
 
-    class ProgramContext(ParserRuleContext):
+    class StartContext(ParserRuleContext):
         __slots__ = 'parser'
 
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
@@ -159,23 +159,23 @@ class NNGraphParser ( Parser ):
 
 
         def getRuleIndex(self):
-            return NNGraphParser.RULE_program
+            return NNGraphParser.RULE_start
 
         def enterRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "enterProgram" ):
-                listener.enterProgram(self)
+            if hasattr( listener, "enterStart" ):
+                listener.enterStart(self)
 
         def exitRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "exitProgram" ):
-                listener.exitProgram(self)
+            if hasattr( listener, "exitStart" ):
+                listener.exitStart(self)
 
 
 
 
-    def program(self):
+    def start(self):
 
-        localctx = NNGraphParser.ProgramContext(self, self._ctx, self.state)
-        self.enterRule(localctx, 0, self.RULE_program)
+        localctx = NNGraphParser.StartContext(self, self._ctx, self.state)
+        self.enterRule(localctx, 0, self.RULE_start)
         self._la = 0 # Token type
         try:
             self.enterOuterAlt(localctx, 1)

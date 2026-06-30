@@ -231,7 +231,7 @@ config {
 \begin{codebox}{گرامر NNGraph.g4}{code-grammar}
 \begin{amzcode}{antlr}
 grammar NNGraph;
-program     : model_block graph_block config_block? EOF;
+start     : model_block graph_block config_block? EOF;
 model_block : MODEL ID '{' input_decl output_decl '}';
 input_decl  : INPUT ID ':' TENSOR shape_expr;
 output_decl : OUTPUT ID;

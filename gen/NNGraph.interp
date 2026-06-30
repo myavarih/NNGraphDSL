@@ -63,7 +63,7 @@ LINE_COMMENT
 BLOCK_COMMENT
 
 rule names:
-program
+start
 model_block
 input_decl
 output_decl
