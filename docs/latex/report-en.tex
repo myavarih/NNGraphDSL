@@ -40,7 +40,7 @@ and in the code generator (execution ordering). Tensor shape
 inference, Graphviz graph visualization, training scaffolding,
 quantization annotations, and ONNX export are also supported.
 
-The test suite comprises 55 tests across four files. Four example
+Four example
 architectures---MLP, ResBlock, InceptionBlock, and
 TransformerEncoder---compile successfully and produce correct
 output tensor shapes in their forward pass.
@@ -1028,36 +1028,6 @@ python main.py -i input/mlp.nng --onnx output/mlp.onnx
 % ================================================================
 \chapter{Evaluation}
 
-\section{Test Suite}
-
-\begin{dfnbox}{Test statistics}{test-stats}
-\begin{itemize}[noitemsep]
-    \item Total tests: \textbf{55}
-    \item Framework: \code{pytest} version 8.4.2
-    \item Runtime: approximately 1.09 seconds
-\end{itemize}
-\end{dfnbox}
-
-\begin{center}
-\begin{tabular}{lcp{6cm}}
-\toprule
-\textbf{File} & \textbf{Tests} & \textbf{Coverage} \\
-\midrule
-\code{test\_parser.py}   & 8  & Grammar parses all 4 examples with zero syntax errors; config, label, shape \\
-\code{test\_listener.py} & 14 & 4 valid inputs; 10 error conditions with \code{SystemExit} \\
-\code{test\_codegen.py}  & 19 & nn class names, parameter values, forward patterns \\
-\code{test\_e2e.py}      & 14 & Full compile + instantiate + forward pass with correct shape \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-Test execution command:
-
-\begin{codebox}{Running the test suite}{code-run-tests}
-\begin{amzcode}{bash}
-python -m pytest tests/ -v
-\end{amzcode}
-\end{codebox}
 
 \section{Forward Pass Results}
 
@@ -1141,7 +1111,6 @@ This follows directly from the invariant:
     \item Language: Python 3.14.3
     \item ANTLR: 4.13.2
     \item PyTorch: 2.10.0
-    \item pytest: 8.4.2
 \end{itemize}
 
 % ================================================================
@@ -1184,8 +1153,8 @@ NNGraph DSL provides a six-stage compiler pipeline from \code{.nng}
 to executable \code{nn.Module}. The compiler features an ANTLR4
 grammar with 14 parser rules, 24 layer types, 8 validation rules,
 and a variable assignment algorithm that handles complex branching
-without tensor overwrite. The compiler has been validated with 55
-tests across four example architectures.
+without tensor overwrite. The compiler has been validated
+against four architectural examples.
 
 \section{Implemented Features}
 
@@ -1227,9 +1196,9 @@ Dynamic control flow & \code{if}/\code{else} branches within \code{forward} \\
     \item Paszke, A., et al. (2019). PyTorch: An Imperative Style,
     High-Performance Deep Learning Library. \textit{NeurIPS 2019}.
     \item NADER Framework: Neural Architecture Design via
-    Representation (referenced in \texttt{NNGraph\_DSL\_Specification.md}).
+    Representation .
     \item Zhang, A. M. \textit{amznotes LaTeX template}.
-    \texttt{github.com/alexmingzhang/latex-notes-template}
+    \url{https://github.com/alexmingzhang/latex-notes-template}
 \end{enumerate}
 
 \end{document}

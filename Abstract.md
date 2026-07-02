@@ -4,7 +4,7 @@ NNGraph DSL is a domain-specific language designed to describe neural network ar
 
 Tensor shape inference, Graphviz graph visualization, training scaffolding, quantization annotations, and ONNX export are also supported.
 
-This Implementation also has a test suite made of 55 tests to ensure correct behavior.
+
 
 
 
@@ -107,9 +107,9 @@ Program Strcuture:
 
 Every .nng file consists of three blocks. The config block is optional:
 
-<the code here stays the same>
 
-<the 3 definitions stay the same>
+
+
 
 
 
@@ -117,15 +117,15 @@ Grammar:
 
 the grammar is simple and short, Complete grammar rules:
 
-<the code block stays the same>
 
-<the important design note is removed>
+
+
 
 
 
 Type System:
 
--table stays the same- but description col will be added from this table:
+
 
 | DSL Type | Example | Description |
 |---|---|---|
@@ -141,13 +141,13 @@ produces an error because p expects a float, not an int.
 
 layer types:
 
-in parametrized layers the table col pythorch class needs to be pytorch mapping
 
-make the title of graph operations Special operations and remove (no Module)
 
-Edge Syntax: keep the existing explanation but also mention that labels are used for these purposes only in this implementation to improve clarity
 
--- then include comments after Edge Syntax
+
+
+
+
 
 **Comments**
 
@@ -280,14 +280,331 @@ it has 6 steps:
    MultiHeadAttn which has a special line of code and also LSTM and GRU which have another special line
    if not in these types the normal line is emited
 
-   at the end back in _emit_forward we check and if any node had quant param in the very begining we add a ` x = self.quant(x)` line and the end use dequant like this: `{self.var_at[self.output_id]} = self.dequant({self.var_at[self.output_id]})`
+   at the end back in _emit_forward we check and if any node had quant param in the very begining we add a ` x = self.quant(x)` line and the end use dequant like this:
+```python
+{self.var_at[self.output_id]} = self.dequant({self.var_at[self.output_id]})
+```
 
 5. _assemble: this first generates the import and class declaration boilerplate then adds init lines and forward lines (from the last 2 steps) and in the end calls _emit_training to optionally generate training loop
 
 6. _emit_training: we first check and if loss function is not specified we will return empty (no training loop). if not we simply map the grammar values (like optimizer, lr and epochs) to PyTorch syntax and place them in the straight forward training loop boilerplate
 
 examples:
--- add examples from input and output dir --
+**MLP Input (`input/mlp.nng`)**:
+```nngraph
+model MLP {
+    input x : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=256)
+    node relu1 : ReLU()
+    node drop1 : Dropout(p=0.3)
+    node fc2   : Linear(in_features=256, out_features=128)
+    node relu2 : ReLU()
+    node fc3   : Linear(in_features=128, out_features=10)
+    node out   : Softmax(dim=1)
+
+    edge x -> fc1
+    edge fc1 -> relu1
+    edge relu1 -> drop1
+    edge drop1 -> fc2
+    edge fc2 -> relu2
+    edge relu2 -> fc3
+    edge fc3 -> out
+}
+
+config {
+    batch_size = 64
+    device = "cuda"
+    loss = "MSELoss"
+    optimizer = "Adam"
+    lr = 0.001
+    epochs = 5
+}
+```
+
+**MLP Output (`output/mlp.py`)**:
+```python
+import torch
+import torch.nn as nn
+
+class MLP(nn.Module):
+    def __init__(self):
+        super(MLP, self).__init__()
+        self.fc1 = nn.Linear(in_features=784, out_features=256)
+        self.relu1 = nn.ReLU()
+        self.drop1 = nn.Dropout(p=0.3)
+        self.fc2 = nn.Linear(in_features=256, out_features=128)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(in_features=128, out_features=10)
+        self.out = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.fc3(x)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cuda')
+    model = MLP().to(device)
+    x = torch.randn(64, 784).to(device)
+    print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    model.train()
+    for epoch in range(5):
+        x = torch.randn(64, 784).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/5, Loss: {loss.item():.4f}')
+```
+
+**ResBlock Input (`input/resblock.nng`)**:
+```nngraph
+model ResBlock {
+    input x : tensor(64, 32, 32)
+    output out
+}
+
+graph {
+    node conv1 : Conv2d(in_ch=64, out_ch=64, kernel=3, stride=1, padding=1)
+    node bn1   : BatchNorm2d(num_features=64)
+    node relu1 : ReLU()
+    node conv2 : Conv2d(in_ch=64, out_ch=64, kernel=3, stride=1, padding=1)
+    node bn2   : BatchNorm2d(num_features=64)
+    node skip  : Residual()
+    node relu2 : ReLU()
+    node out   : Flatten()
+
+    edge x -> conv1
+    edge conv1 -> bn1
+    edge bn1 -> relu1
+    edge relu1 -> conv2
+    edge conv2 -> bn2
+    edge bn2 -> skip
+    edge x -> skip [label="shortcut"]
+    edge skip -> relu2
+    edge relu2 -> out
+}
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "MSELoss"
+    optimizer = "AdamW"
+    lr = 0.0005
+    epochs = 3
+}
+```
+
+**ResBlock Output (`output/resblock.py`)**:
+```python
+import torch
+import torch.nn as nn
+
+class ResBlock(nn.Module):
+    def __init__(self):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(num_features=64)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(num_features=64)
+        self.relu2 = nn.ReLU()
+        self.out = nn.Flatten()
+
+    def forward(self, x):
+        conv1 = self.conv1(x)
+        conv1 = self.bn1(conv1)
+        conv1 = self.relu1(conv1)
+        conv1 = self.conv2(conv1)
+        conv1 = self.bn2(conv1)
+        x = conv1 + x
+        x = self.relu2(x)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = ResBlock().to(device)
+    x = torch.randn(32, 64, 32, 32).to(device)
+    print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
+
+    # Training loop
+    model.train()
+    for epoch in range(3):
+        x = torch.randn(32, 64, 32, 32).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/3, Loss: {loss.item():.4f}')
+```
+
+**QuantMLP Input (`input/quant_mlp.nng`)**:
+```nngraph
+model QuantMLP {
+    input x : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=128, quant="qat")
+    node relu1 : ReLU()
+    node fc2   : Linear(in_features=128, out_features=10, quant="qat")
+    node out   : Softmax(dim=1)
+
+    edge x -> fc1
+    edge fc1 -> relu1
+    edge relu1 -> fc2
+    edge fc2 -> out
+}
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "NLLLoss"
+    optimizer = "Adam"
+    lr = 0.001
+    epochs = 2
+}
+```
+
+**QuantMLP Output (`output/quant_mlp.py`)**:
+```python
+import torch
+import torch.nn as nn
+
+class QuantMLP(nn.Module):
+    def __init__(self):
+        super(QuantMLP, self).__init__()
+        self.fc1 = torch.quantization.QuantWrapper(nn.Linear(in_features=784, out_features=128))
+        self.relu1 = nn.ReLU()
+        self.fc2 = torch.quantization.QuantWrapper(nn.Linear(in_features=128, out_features=10))
+        self.out = nn.Softmax(dim=1)
+        self.quant = torch.quantization.QuantStub()
+        self.dequant = torch.quantization.DeQuantStub()
+
+    def forward(self, x):
+        x = self.quant(x)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.fc2(x)
+        x = self.out(x)
+        x = self.dequant(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = QuantMLP().to(device)
+    x = torch.randn(32, 784).to(device)
+    print(model(x).shape)
+
+    criterion = nn.NLLLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    model.train()
+    for epoch in range(2):
+        x = torch.randn(32, 784).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/2, Loss: {loss.item():.4f}')
+```
+
+**TransformerEncoder Input (`input/transformer.nng`)**:
+```nngraph
+model TransformerEncoder {
+    input x : tensor(512, 128)
+    output out
+}
+
+graph {
+    node attn  : MultiHeadAttn(embed_dim=128, num_heads=8)
+    node drop1 : Dropout(p=0.1)
+    node norm1 : LayerNorm(normalized_shape=128)
+
+    node ff1   : Linear(in_features=128, out_features=512)
+    node gelu1 : GELU()
+    node drop2 : Dropout(p=0.1)
+    node ff2   : Linear(in_features=512, out_features=128)
+    node norm2 : LayerNorm(normalized_shape=128)
+    node out   : Flatten(start_dim=0, end_dim=1)
+
+    edge x -> attn
+    edge attn -> drop1
+    edge drop1 -> norm1
+    edge x -> norm1 [label="residual_1"]
+
+    edge norm1 -> ff1
+    edge ff1 -> gelu1
+    edge gelu1 -> drop2
+    edge drop2 -> ff2
+    edge ff2 -> norm2
+    edge norm1 -> norm2 [label="residual_2"]
+    edge norm2 -> out
+}
+```
+
+**TransformerEncoder Output (`output/transformer.py`)**:
+```python
+import torch
+import torch.nn as nn
+
+class TransformerEncoder(nn.Module):
+    def __init__(self):
+        super(TransformerEncoder, self).__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=128, num_heads=8, batch_first=True)
+        self.drop1 = nn.Dropout(p=0.1)
+        self.norm1 = nn.LayerNorm(normalized_shape=128)
+        self.ff1 = nn.Linear(in_features=128, out_features=512)
+        self.gelu1 = nn.GELU()
+        self.drop2 = nn.Dropout(p=0.1)
+        self.ff2 = nn.Linear(in_features=512, out_features=128)
+        self.norm2 = nn.LayerNorm(normalized_shape=128)
+        self.out = nn.Flatten(start_dim=0, end_dim=1)
+
+    def forward(self, x):
+        attn, _ = self.attn(x, x, x)
+        attn = self.drop1(attn)
+        norm1 = self.norm1(x + attn)
+        ff1 = self.ff1(norm1)
+        ff1 = self.gelu1(ff1)
+        ff1 = self.drop2(ff1)
+        ff1 = self.ff2(ff1)
+        x = self.norm2(norm1 + ff1)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = TransformerEncoder().to(device)
+    x = torch.randn(1, 512, 128).to(device)
+    print(model(x).shape)
+```
 
 Shape Inference:
 Definition 4.5.1 ▶ Shape Inference
@@ -295,16 +612,9 @@ The shape_inference.py module propagates tensor shapes from the input node along
 
 When a dimension mismatch is detected, a ShapeError is reported with the line number of the node declaration, and compilation is halted. The --show-shapes flag displays each node’s output shape.
 
-examples:
-
-ShapeError:
-
 ![image-20260702220712481](/home/emmwhy/.config/Typora/typora-user-images/image-20260702220712481.png) 
 
-Success:
-
 ![image-20260702220817788](/home/emmwhy/.config/Typora/typora-user-images/image-20260702220817788.png)
-
 Graphviz Visualization:
 
 this inputs nodes, edges, input_id, output_id, model_name and shapes and generates a dot file with colors and stuff to make it beautiful!
@@ -312,26 +622,25 @@ not much logic here just making a pretty dot file
 
 the `dot` tool can then be used to generate an image from the dot file
 
-examples:
-inception: 
-
 ![inception](/home/emmwhy/Projects/NNGraphDSL/output/inception.png)
 
-transformer:
 ![transformer](/home/emmwhy/Projects/NNGraphDSL/output/transformer.png)
 
 
 
--- then remove the trainingscaffold and quant sections---
+
 
 ONNX Export
 The onnx_export.py module instantiates the generated code and uses torch.onnx.export
 to produce an .onnx file with a dynamic batch axis and opset 17.
 
--- remove the 2 next chapters Evaluation and design decisions--
 
-Conclusion and Future Work:
--- remove all mention to tests and numbers like 14 parser rules and ... --
--- remove the implemented features section --
 
-fix references the last link is cut of due to long length
+## Conclusion and Future Work
+
+### Conclusion
+The implementation of the NNGraph DSL demonstrates the feasibility of representing complex neural network topologies through a domain-specific language and automatically generating their PyTorch implementations.
+
+### Future Work
+- **Dynamic Control Flow:** Extending the DSL to support recurrent structures with dynamic lengths or conditional branching (e.g., if-else constructs).
+- **Macros and Sub-graphs:** Allowing users to define reusable block macros (like an `InceptionBlock` macro) that can be instantiated multiple times.

@@ -47,7 +47,7 @@
 \LR{Graphviz}، داربست آموزش، حاشیه‌نویسی کوانتیزاسیون و صادرکردن
 \LR{ONNX} نیز پشتیبانی می‌شوند.
 
-مجموعه آزمایش شامل ۵۵ تست در چهار فایل است. چهار معماری
+چهار معماری
 نمونه---\LR{MLP}، \LR{ResBlock}، \LR{InceptionBlock} و
 \LR{TransformerEncoder}---با موفقیت کامپایل شده و
 \LR{forward pass} آن‌ها با شکل خروجی صحیح اجرا شده است.
@@ -1012,36 +1012,7 @@ python main.py -i input/mlp.nng --onnx output/mlp.onnx
 % ================================================================
 \chapter{ارزیابی}
 
-\section{مجموعه آزمایش}
 
-\begin{dfnbox}{آمار آزمایش}{test-stats}
-\begin{itemize}[noitemsep]
-    \item تعداد کل تست‌ها: \textbf{۵۵}
-    \item فریم‌ورک: \code{pytest} نسخه ۸.۴.۲
-    \item زمان اجرا: حدود ۱.۰۹ ثانیه
-\end{itemize}
-\end{dfnbox}
-
-\begin{center}
-\begin{tabular}{lcp{6cm}}
-\toprule
-\textbf{فایل} & \textbf{تست‌ها} & \textbf{پوشش} \\
-\midrule
-\code{test\_parser.py}   & ۸  & گرامر بدون خطای نحوی برای ۴ نمونه؛ config، برچسب، شکل \\
-\code{test\_listener.py} & ۱۴ & ۴ ورودی معتبر؛ ۱۰ شرط خطا با \code{SystemExit} \\
-\code{test\_codegen.py}  & ۱۹ & نام کلاس‌های nn، مقادیر پارامتر، الگوهای forward \\
-\code{test\_e2e.py}      & ۱۴ & کامپایل کامل + ایجاد نمونه + forward pass با شکل صحیح \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-دستور اجرای آزمایش‌ها:
-
-\begin{codebox}{اجرای مجموعه آزمایش}{code-run-tests}
-\begin{amzcode}{bash}
-python -m pytest tests/ -v
-\end{amzcode}
-\end{codebox}
 
 \section{نتایج forward pass}
 
@@ -1123,7 +1094,6 @@ python -m pytest tests/ -v
     \item زبان: Python 3.14.3
     \item ANTLR: 4.13.2
     \item PyTorch: 2.10.0
-    \item pytest: 8.4.2
 \end{itemize}
 
 % ================================================================
@@ -1163,7 +1133,7 @@ python -m pytest tests/ -v
 \code{nn.Module} قابل اجرا ارائه می‌دهد. کامپایلر گرامر \LR{ANTLR4}
 با ۱۴ قانون تجزیه‌گر، ۲۴ نوع لایه، ۸ قانون اعتبارسنجی، و
 الگوریتم تخصیص متغیر که شاخه‌بندی پیچیده را بدون بازنویسی تنسور
-مدیریت می‌کند را ارائه می‌دهد. کامپایلر با ۵۵ تست در چهار معماری
+مدیریت می‌کند را ارائه می‌دهد. کامپایلر در چهار معماری
 نمونه اعتبارسنجی شده است.
 
 \section{قابلیت‌های پیاده‌سازی‌شده}
@@ -1206,9 +1176,9 @@ python -m pytest tests/ -v
     \item \LR{Paszke, A., et al. (2019). PyTorch: An Imperative Style,
     High-Performance Deep Learning Library. \textit{NeurIPS 2019}.}
     \item \LR{NADER Framework: Neural Architecture Design via
-    Representation (referenced in \texttt{NNGraph\_DSL\_Specification.md}).}
+    Representation .}
     \item \LR{Zhang, A. M. \textit{amznotes LaTeX template}.
-    \texttt{github.com/alexmingzhang/latex-notes-template}}
+    \url{https://github.com/alexmingzhang/latex-notes-template}}
 \end{enumerate}
 
 \end{document}

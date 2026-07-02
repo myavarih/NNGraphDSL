@@ -1,0 +1,814 @@
+% NNGraph DSL -- English LaTeX Report
+% Compile: xelatex -shell-escape report-abstract.tex  (run twice)
+
+\documentclass{nngraph-en}
+
+\usepackage{fontspec}
+\setmonofont{Liberation Mono}
+
+\title{
+    \textbf{NNGraph DSL Compiler} \\[0.5em]
+    \large A Domain-Specific Language for Describing Neural Network Architectures \\
+    and Automatic PyTorch Code Generation
+}
+\author{\large Project Technical Report}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\chapter*{Abstract}
+\markboth{Abstract}{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+NNGraph DSL is a domain-specific language designed to describe neural network architectures as directed graphs. It accepts \code{.nng} files as input and produces executable PyTorch code consisting of a complete \code{nn.Module} subclass with \code{\_\_init\_\_} and \code{forward} methods (plus possibly a training loop). The compiler is built with ANTLR4 version 4.13.2.
+
+Tensor shape inference, Graphviz graph visualization, training scaffolding, quantization annotations, and ONNX export are also supported.
+
+
+
+\chapter{Introduction}
+\section{Motivation}
+
+Writing \code{nn.Module} PyTorch codes by hand (or directly via LLM response) is repetitive, error-prone, and most importantly somehow unnecessary! So this project aims to automate and simplify this process by declaring a simple DSL called NNGraph so users can write this simpler syntax (or ask their AI tools to output in this syntax) instead of the more complex PyTorch syntax. This can be helpful for several reasons:
+
+\begin{enumerate}
+    \item Writing this syntax is easier for both humans and AI agents.
+    \item This syntax is less error-prone as the compiler provides useful error checkings as well.
+    \item AI agents can use less tokens if paired with this tool like this: the agent will output code in \code{.nng} format then uses this tool to convert it into PyTorch code to present to user; this makes the agent less error-prone (can catch its errors earlier) and also makes it use less tokens!
+    \item Because of the error checkings and utilities this compiler provides, programmers can also diagnose what's wrong easier and earlier.
+    \item This approach is memory optimized as it allocates the minimum amount of variables needed that can be annoying and often forgotten to be handled by humans (and LLM agents).
+    \item This compiler provides easier generation of boilerplate codes, a good example is Quantization that we will examine later.
+\end{enumerate}
+
+\section{Goals}
+
+\begin{itemize}
+    \item Express any feed-forward or branching neural network topology as a graph.
+    \item Generate clean, idiomatic PyTorch code.
+    \item Support common layer types, activations, normalization, and skip connections.
+    \item Be implementation-agnostic --- the DSL is the single source of truth.
+    \item Allow inline hyperparameter configuration per node.
+\end{itemize}
+
+\begin{notebox}
+Note that the generated code is meant to be a starting point and it's clear that code can be further expanded as needed.
+\end{notebox}
+
+\section{Scope}
+
+The implementation supports code generation (\code{nn.Module}, \code{\_\_init\_\_}, \code{forward()}, training loop and setups) plus basic semantic checks and also shape inference checks, debug and visualization tools, ONNX export and quantization annotations.
+
+But it does not support dynamic control flow meaning the graph is static and known at model definition time.
+
+We also do not have checks for loss function to match the architecture.
+
+Macros and dynamic control flow is planned as future work.
+
+\chapter{Related Work}
+
+\section{The NADER Framework}
+
+\begin{dfnbox}{NADER}{nader}
+NADER (Neural Architecture Design via Representation) is a framework that models neural network architectures as directed computational graphs (DAGs). Each node represents a layer operation and each edge represents tensor flow.
+\end{dfnbox}
+
+NNGraph DSL adopts this graph model as the foundation of its language design.
+
+\chapter{Tools and Tech Stack}
+
+\section{ANTLR4}
+ANTLR4 (ANother Tool for Language Recognition) is a tool that automatically generates a lexer, parser, and listener/visitor from a \code{.g4} grammar file. Version used: ANTLR 4.13.2.
+
+This was the main tool used to implement the compiler.
+
+\section{Python}
+
+Python 3.14.3
+
+\section{PyTorch}
+We didn't directly use PyTorch in this project but as we are generating code the version 2.10.0 was used for code generation and correctness verification.
+
+\chapter{Architecture Overview}
+
+The toolchain follows a classic compiler pipeline:
+
+\begin{codebox}{Architecture Pipeline}{code-arch}
+\begin{amzcode}[fontsize=\scriptsize]{text}
+NNGraph Source (.nng)
+        │
+        ▼
+┌─────────────┐
+│   ANTLR4    │  Lexer + Parser (generated from NNGraph.g4)
+└──────┬──────┘
+       │ Parse Tree
+       ▼
+┌─────────────┐
+│  Semantic   │  Type-checks nodes, validates edges, resolves shapes
+│  Analyzer   │
+└──────┬──────┘
+       │ Validated AST
+       ▼
+┌─────────────┐
+│    Code     │  Emits PyTorch Python module
+│  Generator  │
+└──────┬──────┘
+       │
+       ▼
+Output PyTorch .py File
+\end{amzcode}
+\end{codebox}
+
+\chapter{Language Design}
+
+\section{Program Structure}
+
+Every \code{.nng} file consists of three blocks. The \code{config} block is optional:
+
+\begin{codebox}{General structure of a .nng file}{code-structure}
+\begin{amzcode}{text}
+model <Name> {
+    input  <id> : tensor(<shape>)
+    output <id>
+}
+
+graph {
+    node <id> : <LayerType>(<params>)
+    ...
+    edge <src> -> <dst>
+    edge <src> -> <dst> [label="<string>"]
+    ...
+}
+
+config {
+    batch_size = <int>
+    device     = "cpu" | "cuda"
+    loss       = "<LossFn>"       // enables training scaffold
+    optimizer  = "<Optimizer>"    // Adam | SGD | AdamW | RMSprop
+    lr         = <float>          // learning rate
+    epochs     = <int>            // training epochs
+}
+\end{amzcode}
+\end{codebox}
+
+\begin{dfnbox}{Model block}{block-model}
+The \code{model} block specifies the generated class name, the input node identifier and tensor shape, and the output node identifier.
+\end{dfnbox}
+
+\begin{dfnbox}{Graph block}{block-graph}
+The \code{graph} block defines all layer nodes and directed edges. Edge declaration order does not matter; the compiler computes execution order from the graph structure.
+\end{dfnbox}
+
+\begin{dfnbox}{Config block}{block-config}
+The \code{config} block sets values for the \code{\_\_main\_\_} block of the generated code. \code{batch\_size} defaults to 1 and \code{device} defaults to \code{"cpu"}. If the \code{loss} key is set, the code generator produces a complete training loop with optimizer and loss function.
+\end{dfnbox}
+
+\section{Grammar}
+
+The grammar is simple and short, complete grammar rules:
+
+\begin{codebox}{NNGraph.g4 grammar}{code-grammar}
+\begin{amzcode}{antlr}
+grammar NNGraph;
+start     : model_block graph_block config_block? EOF;
+model_block : MODEL ID '{' input_decl output_decl '}';
+input_decl  : INPUT ID ':' TENSOR shape_expr;
+output_decl : OUTPUT ID;
+graph_block : GRAPH '{' (node_decl | edge_decl)* '}';
+node_decl   : NODE ID ':' layer_expr;
+layer_expr  : ID '(' param_list? ')';
+param_list  : param (',' param)*;
+param       : ID '=' value;
+edge_decl   : EDGE ID ARROW ID ('[' LABEL '=' STRING ']')?;
+config_block: CONFIG '{' config_entry* '}';
+config_entry: ID '=' value;
+value       : FLOAT_LITERAL | INT_LITERAL | BOOL_LITERAL
+            | STRING | NONE | shape_expr;
+shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
+\end{amzcode}
+\end{codebox}
+
+\section{Type System}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{DSL Type} & \textbf{Example} & \textbf{Description} \\
+\midrule
+\code{int}    & \code{128} & Integer literal \\
+\code{float}  & \code{0.1} & Floating-point literal \\
+\code{bool}   & \code{true} / \code{false} & Boolean flag \\
+\code{string} & \code{"relu"} & Quoted string \\
+\code{shape}  & \code{(3, 224, 224)} & Tuple of ints for tensor shape \\
+\code{None}   & \code{None} & Optional absent value \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+Note: The distinction between \code{int} and \code{float} is enforced at compile time. For example, \code{Dropout(p=1)} produces an error because \code{p} expects a \code{float}, not an \code{int}.
+\end{notebox}
+
+\section{Layer Types}
+\subsection{Parameterized Layers}
+
+\begin{center}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{DSL Keyword} & \textbf{PyTorch Mapping} & \textbf{Key Parameters} \\
+\midrule
+\code{Linear}        & \code{nn.Linear}             & \code{in\_features}, \code{out\_features}, \code{bias} \\
+\code{Conv2d}        & \code{nn.Conv2d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride}, \code{padding} \\
+\code{Conv1d}        & \code{nn.Conv1d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride} \\
+\code{BatchNorm2d}   & \code{nn.BatchNorm2d}        & \code{num\_features} \\
+\code{LayerNorm}     & \code{nn.LayerNorm}          & \code{normalized\_shape} \\
+\code{MaxPool2d}     & \code{nn.MaxPool2d}          & \code{kernel}, \code{stride} \\
+\code{AvgPool2d}     & \code{nn.AvgPool2d}          & \code{kernel}, \code{stride} \\
+\code{Dropout}       & \code{nn.Dropout}            & \code{p} \\
+\code{Flatten}       & \code{nn.Flatten}            & \code{start\_dim}, \code{end\_dim} \\
+\code{Embedding}     & \code{nn.Embedding}          & \code{num\_embeddings}, \code{embedding\_dim} \\
+\code{MultiHeadAttn} & \code{nn.MultiheadAttention} & \code{embed\_dim}, \code{num\_heads} \\
+\code{LSTM}          & \code{nn.LSTM}               & \code{input\_size}, \code{hidden\_size}, \code{num\_layers} \\
+\code{GRU}           & \code{nn.GRU}                & \code{input\_size}, \code{hidden\_size} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Special Operations}
+
+\begin{center}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{Keyword} & \textbf{Parameters} & \textbf{Generated Code} \\
+\midrule
+\code{Add}      & ---                          & \code{out = a + b} \\
+\code{Concat}   & \code{dim: int}              & \code{out = torch.cat([a,b], dim=d)} \\
+\code{Residual} & ---                          & \code{out = main + shortcut} \\
+\code{Split}    & \code{chunks: int, dim: int} & \code{split\_0, split\_1, ... = torch.chunk(x,n,dim=d)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Edge Syntax}
+
+\begin{dfnbox}{Simple edge}{edge-simple}
+\texttt{edge src -> dst}
+
+Defines a directed edge from node \code{src} to node \code{dst}.
+\end{dfnbox}
+
+\begin{dfnbox}{Labeled edge}{edge-labeled}
+\texttt{edge src -> dst [label="name"]}
+
+Defines an edge with a string label. Labels serve two roles:
+\begin{itemize}
+    \item \code{"shortcut"}: marks the skip connection edge into a \code{Residual()} node.
+    \item \code{"residual\_*"}: marks a skip connection into a node with two inputs (Transformer pattern).
+\end{itemize}
+\end{dfnbox}
+
+Note that labels are used for these purposes only in this implementation to improve clarity.
+
+\subsection{Comments}
+\begin{codebox}{Comments syntax}{code-comments}
+\begin{amzcode}{text}
+// This is a single-line comment
+
+/* This is a
+   multi-line comment */
+\end{amzcode}
+\end{codebox}
+
+\chapter{Implementation}
+\section{Compiler Architecture}
+
+\begin{dfnbox}{Compilation pipeline}{pipeline}
+The compiler has six stages:
+\begin{enumerate}
+    \item Parsing: \code{.nng} file $\rightarrow$ \code{NNGraphLexer} $\rightarrow$ \code{NNGraphParser.program()} $\rightarrow$ parse tree
+    \item Semantic analysis: \code{ParseTreeWalker} + \code{NNGraphCustomListener} $\rightarrow$ graph model (+ AST - which is not used apart from debugging)
+    \item Topological sort: compute execution order using Kahn's algorithm
+    \item Shape inference: propagate tensor shapes through the graph and detect dimension mismatches (optional: \code{-{}-show-shapes})
+    \item Code generation: \code{CodeGenerator.generate()} $\rightarrow$ Python string
+    \item Output: write to \code{.py} file (+ optional: Graphviz DOT output, or ONNX export)
+\end{enumerate}
+\end{dfnbox}
+
+\section{Parsing}
+This part is done automatically by ANTLR4. Here are some parse tree visualizations based on our grammar \code{.g4} file from the ANTLR extension in PyCharm environment (see Figures \ref{fig:parsetree1}, \ref{fig:parsetree2}, and \ref{fig:parsetree3}):
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{/home/emmwhy/.config/Typora/typora-user-images/image-20260702164342702.png}
+    \caption{Parse Tree Visualization 1}
+    \label{fig:parsetree1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{/home/emmwhy/.config/Typora/typora-user-images/image-20260702164346991.png}
+    \caption{Parse Tree Visualization 2}
+    \label{fig:parsetree2}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1.0\textwidth]{/home/emmwhy/Downloads/parseTree.png}
+    \caption{Detailed Parse Tree}
+    \label{fig:parsetree3}
+\end{figure}
+
+\section{Semantic Analyzer}
+
+We use a \code{CustomListener} approach to analyze the code semantically. This works like this: we declare functions to be executed once we exit (wanna move on from traversing) each node using the tools provided for us from ANTLR4.
+
+3 kinds of work is done:
+\begin{enumerate}
+    \item Populate \code{ctx} (context - ANTLR provides a \code{ctx} for each node with some info - we use those and add some more fields based on our needs) fields for each node (using its children nodes or nodes that were traversed before in general) - and global lists and dictionaries - these will be used in kind 2 when doing the semantic checks (these will be used in Code Generation too and can be considered the output of Semantic Analysis Step).
+    \item Do Semantic Checks and output errors if needed using the info from kind 1.
+    \item AST Creation: AST will be created by \code{exitEveryRule} calling the \code{make\_ast\_subtree} on all nodes which creates the AST subtree, since AST is not crucial to this project we will not examine the details further.
+\end{enumerate}
+
+Kind 1 is routine and therefore we skip explaining it in more detail.
+
+The validations done in kind 2 are these:
+\begin{enumerate}
+    \item \textbf{Check for duplicate node id:} In \code{exitNode\_decl} we check to confirm the node id is not already in nodes dictionary.
+    \item \textbf{Check for unknown layer type:} Check to confirm the layer type is declared in our fixed \code{LAYER\_SCHEMA} in \code{exitNode\_decl}.
+    \item \textbf{Check for correct parameter types:} Using \code{LAYER\_SCHEMA} and \code{UNIVERSAL\_PARAMS} (quant) also in \code{exitNode\_decl} (this checks if each layer has correct parameters and the parameter values have correct type).
+    \item \textbf{Check for correct quant value:} Check to confirm the value of quant param is correct using \code{QUANT\_MODES} also in \code{exitNode\_decl}.
+    \item \textbf{Check if the nodes exist in edge declaration:} In \code{exitEdge\_decl}.
+    \item \textbf{Check for output declaration:} After the graph block is completed $\rightarrow$ we simple check if output is in nodes.
+    \item \textbf{Check for orphan nodes:} For each edge we make a referenced flag for both src and dst true and see if any node has a false flag after.
+    \item \textbf{Check if residual nodes have exactly 2 inputs:} We find residuals and check if they have 2 \code{in\_edges}.
+    \item \textbf{Cycle detection:} We use Kahn's algorithm to determine if the graph is a DAG: in each step we remove the node with no \code{in\_edges} and then update the \code{in\_edges} for other nodes until the graph has no more nodes, if in any step there is no node with 0 \code{in\_edges} the graph has a cycle.
+    \item \textbf{Reachability:} We use BFS to traverse the graph and check if all nodes are reachable from input (including output).
+\end{enumerate}
+
+\begin{notebox}
+Note: items 6 to 10 are done in \code{exitGraph\_block} after the graph block is walked and nodes and edges are filled.
+\end{notebox}
+
+If in any case those validations fail we will have an error in this format:
+
+\begin{codebox}{Error format}{code-error}
+\begin{amzcode}{text}
+[line L:C] SemanticError: <message>
+\end{amzcode}
+\end{codebox}
+
+Example:
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{/home/emmwhy/.config/Typora/typora-user-images/image-20260702215847618.png}
+    \caption{Semantic Error Example}
+\end{figure}
+
+\section{Code Generator}
+
+Code generation is done via the info gathered by the last step which is Semantic Analysis (like nodes and edges and \code{model\_name} and ...).
+
+It has 6 steps:
+\begin{enumerate}
+    \item \code{\_compute\_graph}: Uses the same Kahn's algorithm but this time for topological sort, we need topological sort because it's essential to first process the input nodes of a node then that node to able to generate the code correctly, the algorithm is simple too just like before but after removing a node we append it to the \code{topo\_order} too.
+    \item \code{\_assign\_vars}: This assigns variables to each node but uses 4 rules to ensure minimum memory allocation along with correct behavior:
+    \begin{enumerate}
+        \item For input node always allocate \code{x}.
+        \item For merge nodes (\code{in\_degree} > 1): if the out degree is 1 or 0 allocate \code{x} - if out degree is more than 1 allocate a variable named as \code{node\_id}.
+        \item Branch nodes (predecessor \code{out\_degree} > 1): allocate a variable named as \code{node\_id} (split nodes' out nodes also get named similarly but with a small difference: the variable is named like this: \code{source\_name + '\_' + index of the node}).
+        \item And if \code{out\_degree} is 1 we will allocate the same variable allocated to its predecessor to reuse memory.
+    \end{enumerate}
+    \item \code{\_emit\_init}: For this part we need to get PyTorch class name for each node that has a module and also make its params string in correct format. We have a map to map each node (not in nodes with no modules like Add) to its PyTorch class name and also get the names of params that it accepts. Then with those param names we use \code{\_build\_params} to build the params string like this: if the value has type string wrap it in double quotes if not just simply set it like \code{param\_name = param\_value} and another exception is for \code{MultiHeadAttn} layer, we always add this param to it: \code{batch\_first=True}. Now we have the data we need, so for each node we first check if quantization is enabled, if yes we wrap the code into a PyTorch Quantization wrapper if not we emit the normal code, and in the end if any of the nodes had quantization enabled we emit code for Stubs too. In this step topo order does not matter but we use topo order anyway.
+    \item \code{\_emit\_forward}: This uses the helper \code{\_emit\_node} to emit the line for each node. First we examine the behavior for special nodes:
+    
+    \textbf{Residual:} We determine the shortcut edge (which is the edge that has the shortcut label) and also the main branch edge (which does not have shortcut label). Then we get the related vars to the src of those edges and generate the code like: \code{out\_var} (determined by getting \code{var\_at[current\_node]}) \code{= main\_var + shortcut\_var}.
+    
+    \textbf{Add:} For Add we do a similar job: we add all input vars and assign back to the \code{out\_var}.
+    
+    \textbf{Concat:} This is similar to Add but we also dim from the params of that node and use \code{torch.cat} instead of simple \code{+}.
+    
+    \textbf{Split:} This is again similar to Concat but we need to get chunks and dim from params and use \code{torch.chunk}.
+    
+    Now for nodes that have Modules: One special case is implicit Residuals when the node has more than 1 input. We handle these like normal Residuals with the difference that we look for the edges that their label start with \code{residual} to mark as shortcut and we give the addition of those \code{main\_var} and \code{shortcut\_var} to the module input. If no such edges with residual label found then we fall-back to default behavior where we simply use the first edge's src's var as the input of the module.
+    
+    Normal case is when we have one input, but there is 2 special nodes in that case too: \code{MultiHeadAttn} which has a special line of code and also \code{LSTM} and \code{GRU} which have another special line. If not in these types the normal line is emitted.
+    
+    At the end back in \code{\_emit\_forward} we check and if any node had quant param in the very beginning we add a \code{x = self.quant(x)} line and at the end use dequant like this:
+
+    \begin{codebox}{Dequantize output}{code-dequant}
+    \begin{amzcode}[fontsize=\scriptsize]{python}
+{self.var_at[self.output_id]} = self.dequant({self.var_at[self.output_id]})
+    \end{amzcode}
+    \end{codebox}
+    
+    \item \code{\_assemble}: This first generates the import and class declaration boilerplate then adds init lines and forward lines (from the last 2 steps) and in the end calls \code{\_emit\_training} to optionally generate training loop.
+    \item \code{\_emit\_training}: We first check and if loss function is not specified we will return empty (no training loop). If not we simply map the grammar values (like optimizer, lr and epochs) to PyTorch syntax and place them in the straightforward training loop boilerplate.
+\end{enumerate}
+
+\textbf{MLP Input (\code{input/mlp.nng})}:
+\begin{codebox}{MLP Input}{code-mlp-input}
+\begin{amzcode}[fontsize=\scriptsize]{text}
+model MLP {
+    input x : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=256)
+    node relu1 : ReLU()
+    node drop1 : Dropout(p=0.3)
+    node fc2   : Linear(in_features=256, out_features=128)
+    node relu2 : ReLU()
+    node fc3   : Linear(in_features=128, out_features=10)
+    node out   : Softmax(dim=1)
+
+    edge x -> fc1
+    edge fc1 -> relu1
+    edge relu1 -> drop1
+    edge drop1 -> fc2
+    edge fc2 -> relu2
+    edge relu2 -> fc3
+    edge fc3 -> out
+}
+
+config {
+    batch_size = 64
+    device = "cuda"
+    loss = "MSELoss"
+    optimizer = "Adam"
+    lr = 0.001
+    epochs = 5
+}
+\end{amzcode}
+\end{codebox}
+
+\textbf{MLP Output (\code{output/mlp.py})}:
+\begin{codebox}{MLP Output}{code-mlp-output}
+\begin{amzcode}[fontsize=\scriptsize]{python}
+import torch
+import torch.nn as nn
+
+class MLP(nn.Module):
+    def __init__(self):
+        super(MLP, self).__init__()
+        self.fc1 = nn.Linear(in_features=784, out_features=256)
+        self.relu1 = nn.ReLU()
+        self.drop1 = nn.Dropout(p=0.3)
+        self.fc2 = nn.Linear(in_features=256, out_features=128)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(in_features=128, out_features=10)
+        self.out = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.fc3(x)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cuda')
+    model = MLP().to(device)
+    x = torch.randn(64, 784).to(device)
+    print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    model.train()
+    for epoch in range(5):
+        x = torch.randn(64, 784).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/5, Loss: {loss.item():.4f}')
+\end{amzcode}
+\end{codebox}
+
+\textbf{ResBlock Input (\code{input/resblock.nng})}:
+\begin{codebox}{ResBlock Input}{code-resblock-input}
+\begin{amzcode}[fontsize=\scriptsize]{text}
+model ResBlock {
+    input x : tensor(64, 32, 32)
+    output out
+}
+
+graph {
+    node conv1 : Conv2d(in_ch=64, out_ch=64, kernel=3, stride=1, padding=1)
+    node bn1   : BatchNorm2d(num_features=64)
+    node relu1 : ReLU()
+    node conv2 : Conv2d(in_ch=64, out_ch=64, kernel=3, stride=1, padding=1)
+    node bn2   : BatchNorm2d(num_features=64)
+    node skip  : Residual()
+    node relu2 : ReLU()
+    node out   : Flatten()
+
+    edge x -> conv1
+    edge conv1 -> bn1
+    edge bn1 -> relu1
+    edge relu1 -> conv2
+    edge conv2 -> bn2
+    edge bn2 -> skip
+    edge x -> skip [label="shortcut"]
+    edge skip -> relu2
+    edge relu2 -> out
+}
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "MSELoss"
+    optimizer = "AdamW"
+    lr = 0.0005
+    epochs = 3
+}
+\end{amzcode}
+\end{codebox}
+
+\textbf{ResBlock Output (\code{output/resblock.py})}:
+\begin{codebox}{ResBlock Output}{code-resblock-output}
+\begin{amzcode}[fontsize=\scriptsize]{python}
+import torch
+import torch.nn as nn
+
+class ResBlock(nn.Module):
+    def __init__(self):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(num_features=64)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(num_features=64)
+        self.relu2 = nn.ReLU()
+        self.out = nn.Flatten()
+
+    def forward(self, x):
+        conv1 = self.conv1(x)
+        conv1 = self.bn1(conv1)
+        conv1 = self.relu1(conv1)
+        conv1 = self.conv2(conv1)
+        conv1 = self.bn2(conv1)
+        x = conv1 + x
+        x = self.relu2(x)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = ResBlock().to(device)
+    x = torch.randn(32, 64, 32, 32).to(device)
+    print(model(x).shape)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
+
+    # Training loop
+    model.train()
+    for epoch in range(3):
+        x = torch.randn(32, 64, 32, 32).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/3, Loss: {loss.item():.4f}')
+\end{amzcode}
+\end{codebox}
+
+\textbf{QuantMLP Input (\code{input/quant\_mlp.nng})}:
+\begin{codebox}{QuantMLP Input}{code-quantmlp-input}
+\begin{amzcode}[fontsize=\scriptsize]{text}
+model QuantMLP {
+    input x : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=128, quant="qat")
+    node relu1 : ReLU()
+    node fc2   : Linear(in_features=128, out_features=10, quant="qat")
+    node out   : Softmax(dim=1)
+
+    edge x -> fc1
+    edge fc1 -> relu1
+    edge relu1 -> fc2
+    edge fc2 -> out
+}
+
+config {
+    batch_size = 32
+    device = "cpu"
+    loss = "NLLLoss"
+    optimizer = "Adam"
+    lr = 0.001
+    epochs = 2
+}
+\end{amzcode}
+\end{codebox}
+
+\textbf{QuantMLP Output (\code{output/quant\_mlp.py})}:
+\begin{codebox}{QuantMLP Output}{code-quantmlp-output}
+\begin{amzcode}[fontsize=\scriptsize]{python}
+import torch
+import torch.nn as nn
+
+class QuantMLP(nn.Module):
+    def __init__(self):
+        super(QuantMLP, self).__init__()
+        self.fc1 = torch.quantization.QuantWrapper(nn.Linear(in_features=784, out_features=128))
+        self.relu1 = nn.ReLU()
+        self.fc2 = torch.quantization.QuantWrapper(nn.Linear(in_features=128, out_features=10))
+        self.out = nn.Softmax(dim=1)
+        self.quant = torch.quantization.QuantStub()
+        self.dequant = torch.quantization.DeQuantStub()
+
+    def forward(self, x):
+        x = self.quant(x)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.fc2(x)
+        x = self.out(x)
+        x = self.dequant(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = QuantMLP().to(device)
+    x = torch.randn(32, 784).to(device)
+    print(model(x).shape)
+
+    criterion = nn.NLLLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    model.train()
+    for epoch in range(2):
+        x = torch.randn(32, 784).to(device)
+        y = model(x)
+        target = torch.zeros_like(y)
+        loss = criterion(y, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print(f'Epoch {epoch+1}/2, Loss: {loss.item():.4f}')
+\end{amzcode}
+\end{codebox}
+
+\textbf{TransformerEncoder Input (\code{input/transformer.nng})}:
+\begin{codebox}{TransformerEncoder Input}{code-transformer-input}
+\begin{amzcode}[fontsize=\scriptsize]{text}
+model TransformerEncoder {
+    input x : tensor(512, 128)
+    output out
+}
+
+graph {
+    node attn  : MultiHeadAttn(embed_dim=128, num_heads=8)
+    node drop1 : Dropout(p=0.1)
+    node norm1 : LayerNorm(normalized_shape=128)
+
+    node ff1   : Linear(in_features=128, out_features=512)
+    node gelu1 : GELU()
+    node drop2 : Dropout(p=0.1)
+    node ff2   : Linear(in_features=512, out_features=128)
+    node norm2 : LayerNorm(normalized_shape=128)
+    node out   : Flatten(start_dim=0, end_dim=1)
+
+    edge x -> attn
+    edge attn -> drop1
+    edge drop1 -> norm1
+    edge x -> norm1 [label="residual_1"]
+
+    edge norm1 -> ff1
+    edge ff1 -> gelu1
+    edge gelu1 -> drop2
+    edge drop2 -> ff2
+    edge ff2 -> norm2
+    edge norm1 -> norm2 [label="residual_2"]
+    edge norm2 -> out
+}
+\end{amzcode}
+\end{codebox}
+
+\textbf{TransformerEncoder Output (\code{output/transformer.py})}:
+\begin{codebox}{TransformerEncoder Output}{code-transformer-output}
+\begin{amzcode}[fontsize=\scriptsize]{python}
+import torch
+import torch.nn as nn
+
+class TransformerEncoder(nn.Module):
+    def __init__(self):
+        super(TransformerEncoder, self).__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=128, num_heads=8, batch_first=True)
+        self.drop1 = nn.Dropout(p=0.1)
+        self.norm1 = nn.LayerNorm(normalized_shape=128)
+        self.ff1 = nn.Linear(in_features=128, out_features=512)
+        self.gelu1 = nn.GELU()
+        self.drop2 = nn.Dropout(p=0.1)
+        self.ff2 = nn.Linear(in_features=512, out_features=128)
+        self.norm2 = nn.LayerNorm(normalized_shape=128)
+        self.out = nn.Flatten(start_dim=0, end_dim=1)
+
+    def forward(self, x):
+        attn, _ = self.attn(x, x, x)
+        attn = self.drop1(attn)
+        norm1 = self.norm1(x + attn)
+        ff1 = self.ff1(norm1)
+        ff1 = self.gelu1(ff1)
+        ff1 = self.drop2(ff1)
+        ff1 = self.ff2(ff1)
+        x = self.norm2(norm1 + ff1)
+        x = self.out(x)
+        return x
+
+if __name__ == '__main__':
+    device = torch.device('cpu')
+    model = TransformerEncoder().to(device)
+    x = torch.randn(1, 512, 128).to(device)
+    print(model(x).shape)
+\end{amzcode}
+\end{codebox}
+
+
+\section{Shape Inference}
+
+\begin{dfnbox}{Shape Inference}{shape-inference}
+The \code{shape\_inference.py} module propagates tensor shapes from the input node along the topological order. For each layer type, specific rules are applied: Linear changes the last dimension, Conv2d computes spatial dimensions, Flatten merges dimensions, and so on.
+\end{dfnbox}
+
+When a dimension mismatch is detected, a ShapeError is reported with the line number of the node declaration, and compilation is halted (see Figure \ref{fig:shapeerror}). The \code{-{}-show-shapes} flag displays each node's output shape (see Figure \ref{fig:shapesuccess}).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{/home/emmwhy/.config/Typora/typora-user-images/image-20260702220712481.png}
+    \caption{Shape Error Example}
+    \label{fig:shapeerror}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{/home/emmwhy/.config/Typora/typora-user-images/image-20260702220817788.png}
+    \caption{Shape Success Example}
+    \label{fig:shapesuccess}
+\end{figure}
+
+\section{Graphviz Visualization}
+
+This inputs nodes, edges, \code{input\_id}, \code{output\_id}, \code{model\_name} and shapes and generates a dot file with colors and stuff to make it beautiful! Not much logic here just making a pretty dot file.
+
+The \code{dot} tool can then be used to generate an image from the dot file (see Figures \ref{fig:inception} and \ref{fig:transformer}).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1.0\textwidth,height=0.8\textheight,keepaspectratio]{/home/emmwhy/Projects/NNGraphDSL/output/inception.png}
+    \caption{Inception Architecture}
+    \label{fig:inception}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1.0\textwidth,height=0.8\textheight,keepaspectratio]{/home/emmwhy/Projects/NNGraphDSL/output/transformer.png}
+    \caption{Transformer Architecture}
+    \label{fig:transformer}
+\end{figure}
+
+\section{ONNX Export}
+The \code{onnx\_export.py} module instantiates the generated code and uses \code{torch.onnx.export} to produce an \code{.onnx} file with a dynamic batch axis and opset 17.
+
+\chapter{Conclusion and Future Work}
+\section{Conclusion}
+The implementation of the NNGraph DSL demonstrates the feasibility of representing complex neural network topologies through a domain-specific language and automatically generating their PyTorch implementations.
+
+\section{Future Work}
+\begin{itemize}
+    \item \textbf{Dynamic Control Flow:} Extending the DSL to support recurrent structures with dynamic lengths or conditional branching (e.g., if-else constructs).
+    \item \textbf{Macros and Sub-graphs:} Allowing users to define reusable block macros (like an \code{InceptionBlock} macro) that can be instantiated multiple times.
+\end{itemize}
+
+\chapter*{References}
+\markboth{References}{References}
+\addcontentsline{toc}{chapter}{References}
+
+\begin{enumerate}
+    \item Parr, T. (2013). \textit{The Definitive ANTLR 4 Reference}.
+    Pragmatic Bookshelf.
+    \item Paszke, A., et al. (2019). PyTorch: An Imperative Style,
+    High-Performance Deep Learning Library. \textit{NeurIPS 2019}.
+    \item NADER Framework: Neural Architecture Design via
+    Representation .
+    \item Zhang, A. M. \textit{amznotes LaTeX template}.
+    \url{https://github.com/alexmingzhang/latex-notes-template}
+\end{enumerate}
+
+\end{document}

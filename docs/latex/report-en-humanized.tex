@@ -31,7 +31,7 @@ nngraph dsl is a domain-specific language we made to describe neural networks as
 
 we built the compiler using ANTLR4 version 4.13.2 and went with the listener pattern for the semantic analysis part. we use Kahn's topological sort for both finding cycles in the semantic analyzer and figuring out the execution order in the code generator. on top of that, it supports tensor shape inference, graphviz visualizations, training scaffolding, quantization annotations, and even ONNX export
 
-our test suite has 55 tests spread over four files. we tested it on four main architectures---MLP, ResBlock, InceptionBlock, and TransformerEncoder---and they all compile fine and get the right output tensor shapes in their forward pass
+we tested it on four main architectures---MLP, ResBlock, InceptionBlock, and TransformerEncoder---and they all compile fine and get the right output tensor shapes in their forward pass
 
 % ================================================================
 \chapter{Introduction}
@@ -887,36 +887,7 @@ python main.py -i input/mlp.nng --onnx output/mlp.onnx
 % ================================================================
 \chapter{Evaluation}
 
-\section{Test Suite}
 
-\begin{dfnbox}{Test statistics}{test-stats}
-\begin{itemize}[noitemsep]
-    \item total tests: \textbf{55}
-    \item framework: \code{pytest} version 8.4.2
-    \item runtime: around 1.09 seconds
-\end{itemize}
-\end{dfnbox}
-
-\begin{center}
-\begin{tabular}{lcp{6cm}}
-\toprule
-\textbf{File} & \textbf{Tests} & \textbf{Coverage} \\
-\midrule
-\code{test\_parser.py}   & 8  & grammar parses all 4 examples with zero syntax errors; config, label, shape \\
-\code{test\_listener.py} & 14 & 4 valid inputs; 10 error conditions with \code{SystemExit} \\
-\code{test\_codegen.py}  & 19 & nn class names, parameter values, forward patterns \\
-\code{test\_e2e.py}      & 14 & full compile + instantiate + forward pass with correct shape \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-how to run the tests:
-
-\begin{codebox}{Running the test suite}{code-run-tests}
-\begin{amzcode}{bash}
-python -m pytest tests/ -v
-\end{amzcode}
-\end{codebox}
 
 \section{Forward Pass Results}
 
@@ -988,7 +959,6 @@ this works perfectly because of our invariant: \code{var\_at[n]='x'} only trigge
     \item language: Python 3.14.3
     \item ANTLR: 4.13.2
     \item PyTorch: 2.10.0
-    \item pytest: 8.4.2
 \end{itemize}
 
 % ================================================================
@@ -1016,7 +986,7 @@ the language specs show single-letter or descriptive names in the examples. we d
 
 \section{Conclusion}
 
-nngraph dsl gives you a solid six-stage compiler pipeline to turn your \code{.nng} file into a fully working \code{nn.Module}. we built it with an ANTLR4 grammar packing 14 parser rules, 24 layer types, 8 validation checks, and a really smart variable assignment algorithm that handles messy branching without accidentally overwriting tensors. we've validated the whole thing with 55 tests running against four different architectural examples
+nngraph dsl gives you a solid six-stage compiler pipeline to turn your \code{.nng} file into a fully working \code{nn.Module}. we built it with an ANTLR4 grammar packing 14 parser rules, 24 layer types, 8 validation checks, and a really smart variable assignment algorithm that handles messy branching without accidentally overwriting tensors. we've validated the whole thing against four different architectural examples
 
 \section{Implemented Features}
 
@@ -1055,8 +1025,8 @@ Dynamic control flow & \code{if}/\code{else} branches within \code{forward} \\
 \begin{enumerate}
     \item Parr, T. (2013). \textit{The Definitive ANTLR 4 Reference}. Pragmatic Bookshelf
     \item Paszke, A., et al. (2019). PyTorch: An Imperative Style, High-Performance Deep Learning Library. \textit{NeurIPS 2019}
-    \item NADER Framework: Neural Architecture Design via Representation (referenced in \texttt{NNGraph\_DSL\_Specification.md})
-    \item Zhang, A. M. \textit{amznotes LaTeX template}. \texttt{github.com/alexmingzhang/latex-notes-template}
+    \item NADER Framework: Neural Architecture Design via Representation 
+    \item Zhang, A. M. \textit{amznotes LaTeX template}. \url{https://github.com/alexmingzhang/latex-notes-template}
 \end{enumerate}
 
 \end{document}

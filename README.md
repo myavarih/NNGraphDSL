@@ -303,20 +303,6 @@ python output/resblock.py
 # → torch.Size([1, 65536])
 ```
 
----
-
-## Running the tests
-
-```bash
-python -m pytest tests/ -v
-```
-
-55 tests across four files:
-
-- `tests/test_parser.py` — grammar parses all four examples with zero syntax errors.
-- `tests/test_listener.py` — valid graphs pass; each of the 8 error conditions raises `SystemExit` at the correct line.
-- `tests/test_codegen.py` — generated code contains the expected `nn` classes, parameter names, and forward-pass patterns.
-- `tests/test_e2e.py` — each example compiles, instantiates, and produces the correct output tensor shape under PyTorch.
 
 ---
 

@@ -221,6 +221,7 @@
         breaklines,
         autogobble,
         xleftmargin=3.75mm,
+        #1
     ]{#2}}
 {\end{minted}}
 

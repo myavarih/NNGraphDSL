@@ -172,10 +172,4 @@ Written: output/mlp.py
 torch.Size([64, 10])
 ```
 
-Run all tests to confirm the installation works:
 
-```bash
-python -m pytest tests/ -v
-```
-
-All 55 tests should pass.

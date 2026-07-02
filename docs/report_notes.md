@@ -228,18 +228,7 @@ All other parameter names pass through unchanged.
 
 ## 5. Evaluation
 
-### 5.1 Test suite
 
-- Total tests: **55**
-- Framework: pytest 8.4.2
-- Runtime: ~1.09 seconds on local machine
-
-| File | Tests | What it covers |
-|---|---|---|
-| `tests/test_parser.py` | 8 | Grammar parses all 4 examples with 0 syntax errors; config, label, shape parsing |
-| `tests/test_listener.py` | 14 | 4 valid inputs pass; 8 error conditions each raise `SystemExit` at correct line |
-| `tests/test_codegen.py` | 19 | `nn` class names, parameter values, forward-pass patterns in generated source |
-| `tests/test_e2e.py` | 14 | Full compile + instantiate + forward pass with correct output tensor shape |
 
 ### 5.2 Worked examples
 
@@ -338,7 +327,6 @@ the node's declaration, keeping the error format consistent.
 Language: Python 3.14.3
 ANTLR version: 4.13.2
 PyTorch version: 2.10.0
-Test runner: pytest 8.4.2
 
 ---
 
