@@ -19,7 +19,7 @@ class ResBlock(nn.Module):
         conv1 = self.relu1(conv1)
         conv1 = self.conv2(conv1)
         conv1 = self.bn2(conv1)
-        x = conv1 + x
+        x = conv1 + x  # shortcut
         x = self.relu2(x)
         x = self.out(x)
         return x

@@ -1,9 +1,6 @@
 from collections import deque
-
 NO_MODULE_NODES = {"Add", "Concat", "Residual", "Split", "__input__"}
-
 UNIVERSAL_PARAMS = {"quant"}
-
 PYTORCH_MAP = {
     "Linear":        ("nn.Linear",            {"in_features": "in_features", "out_features": "out_features", "bias": "bias"}),
     "Conv2d":        ("nn.Conv2d",             {"in_ch": "in_channels", "out_ch": "out_channels", "kernel": "kernel_size", "stride": "stride", "padding": "padding"}),
@@ -26,10 +23,7 @@ PYTORCH_MAP = {
     "LeakyReLU":     ("nn.LeakyReLU",          {"negative_slope": "negative_slope"}),
     "ELU":           ("nn.ELU",                {"alpha": "alpha"}),
 }
-
-
 class CodeGenerator:
-
     def __init__(self):
         self.model_name  = None
         self.input_id    = None
@@ -38,13 +32,11 @@ class CodeGenerator:
         self.nodes       = {}
         self.edges       = []
         self.config      = {}
-
         self.topo_order = []
         self.in_edges   = {}
         self.out_edges  = {}
         self.var_at     = {}
         self._graph_computed = False
-
     def load_from_listener(self, listener, traversal=None):
         self.model_name  = listener.model_name
         self.input_id    = listener.input_id
@@ -61,16 +53,12 @@ class CodeGenerator:
             for e in self.edges:
                 self.in_edges[e["dst"]].append(e)
                 self.out_edges[e["src"]].append(e)
-
     def generate(self):
         self._compute_graph()
         self._assign_vars()
         init_lines    = self._emit_init()
         forward_lines = self._emit_forward()
         return self._assemble(init_lines, forward_lines)
-
-    # ── graph utilities ────────────────────────────────────────
-
     def _compute_graph(self):
         if self._graph_computed:
             return
@@ -79,8 +67,6 @@ class CodeGenerator:
         for e in self.edges:
             self.in_edges[e["dst"]].append(e)
             self.out_edges[e["src"]].append(e)
-
-        # Kahn topological sort
         in_degree = {n: len(self.in_edges[n]) for n in self.nodes}
         queue     = deque(n for n, d in in_degree.items() if d == 0)
         order     = []
@@ -93,27 +79,19 @@ class CodeGenerator:
                     queue.append(e["dst"])
         self.topo_order = order
         self._graph_computed = True
-
     def _assign_vars(self):
         out_degree = {n: len(self.out_edges[n]) for n in self.nodes}
-
         var_at = {self.input_id: "x"}
-
         for node_id in self.topo_order:
             if node_id == self.input_id:
                 continue
-
             my_in = self.in_edges[node_id]
-
             if not my_in:
                 var_at[node_id] = "x"
                 continue
-
             if len(my_in) > 1:
-                # merge node: goes back to 'x' unless it also fans out
                 var_at[node_id] = "x" if out_degree[node_id] <= 1 else node_id
                 continue
-
             src = my_in[0]["src"]
             src_type = self.nodes[src]["type"]
             if src_type == "Split":
@@ -123,19 +101,11 @@ class CodeGenerator:
                 var_at[node_id] = node_id
             else:
                 var_at[node_id] = var_at[src]
-
         self.var_at = var_at
-
     def _input_var(self, edge):
         """Resolve the variable name for an edge's source, handling Split chunk indexing."""
         src = edge["src"]
-        if self.nodes[src]["type"] == "Split":
-            idx = self.out_edges[src].index(edge)
-            return f"{src}_{idx}"
         return self.var_at[src]
-
-    # ── __init__ emission ─────────────────────────────────────
-
     def _emit_init(self):
         lines = []
         has_quant = False
@@ -159,7 +129,6 @@ class CodeGenerator:
             lines.append("        self.dequant = torch.quantization.DeQuantStub()")
         self._has_quant = has_quant
         return lines
-
     def _build_params(self, layer_type, params, param_name_map):
         parts = []
         for dsl_name, pytorch_name in param_name_map.items():
@@ -172,9 +141,6 @@ class CodeGenerator:
         if layer_type == "MultiHeadAttn":
             parts.append("batch_first=True")
         return ", ".join(parts)
-
-    # ── forward() emission ────────────────────────────────────
-
     def _emit_forward(self):
         lines = []
         if getattr(self, '_has_quant', False):
@@ -185,47 +151,34 @@ class CodeGenerator:
             lines.append(f"        {self.var_at[self.output_id]} = self.dequant({self.var_at[self.output_id]})")
         lines.append(f"        return {self.var_at[self.output_id]}")
         return lines
-
     def _emit_node(self, node_id):
         info       = self.nodes[node_id]
         layer_type = info["type"]
         my_in      = self.in_edges[node_id]
         out_var    = self.var_at[node_id]
-
         if layer_type == "__input__":
             return []
-
-        # ── special ops (no self.x module) ────────────────────
-
         if layer_type == "Residual":
             shortcut_edges = [e for e in my_in if e.get("label") == "shortcut"]
             main_edges     = [e for e in my_in if e.get("label") != "shortcut"]
             main_var  = self._input_var(main_edges[0])
             skip_var  = self._input_var(shortcut_edges[0])
             return [f"        {out_var} = {main_var} + {skip_var}"]
-
         if layer_type == "Add":
             in_vars = [self._input_var(e) for e in my_in]
             rhs = " + ".join(in_vars)
             return [f"        {out_var} = {rhs}"]
-
         if layer_type == "Concat":
             in_vars = [self._input_var(e) for e in my_in]
             dim     = info["params"].get("dim", {}).get("value", 1)
             return [f"        {out_var} = torch.cat([{', '.join(in_vars)}], dim={dim})"]
-
         if layer_type == "Split":
             in_var  = self._input_var(my_in[0])
             chunks  = info["params"].get("chunks", {}).get("value", 2)
             dim     = info["params"].get("dim", {}).get("value", 1)
             chunk_vars = ", ".join(f"{node_id}_{i}" for i in range(chunks))
             return [f"        {chunk_vars} = torch.chunk({in_var}, {chunks}, dim={dim})"]
-
-        # ── nodes with pytorch modules ─────────────────────────
-
         if len(my_in) > 1:
-            # implicit residual: node has a module but takes 2+ in-edges
-            # one in-edge is labeled "residual_*" (skip); the other is the main path
             residual_edges = [e for e in my_in if (e.get("label") or "").startswith("residual")]
             main_edges     = [e for e in my_in if e not in residual_edges]
             if residual_edges:
@@ -234,24 +187,16 @@ class CodeGenerator:
                 return [f"        {out_var} = self.{node_id}({skip_var} + {main_var})"]
             in_var = self._input_var(my_in[0])
             return [f"        {out_var} = self.{node_id}({in_var})"]
-
         in_var = self._input_var(my_in[0])
-
         if layer_type == "MultiHeadAttn":
             return [f"        {out_var}, _ = self.{node_id}({in_var}, {in_var}, {in_var})"]
-
         if layer_type in ("LSTM", "GRU"):
             return [f"        {out_var}, _ = self.{node_id}({in_var})"]
-
         return [f"        {out_var} = self.{node_id}({in_var})"]
-
-    # ── assembly ───────────────────────────────────────────────
-
     def _assemble(self, init_lines, forward_lines):
         device     = self.config.get("device", "cpu")
         batch_size = self.config.get("batch_size", 1)
         shape_str  = ", ".join(str(s) for s in (batch_size,) + self.input_shape)
-
         parts = [
             "import torch",
             "import torch.nn as nn",
@@ -278,16 +223,13 @@ class CodeGenerator:
         ]
         parts.extend(self._emit_training(shape_str))
         return "\n".join(parts) + "\n"
-
     def _emit_training(self, shape_str):
         loss_fn = self.config.get("loss")
         if not loss_fn:
             return []
-
         optimizer = self.config.get("optimizer", "Adam")
         lr        = self.config.get("lr", 0.001)
         epochs    = self.config.get("epochs", 10)
-
         LOSS_MAP = {
             "CrossEntropyLoss": "nn.CrossEntropyLoss()",
             "MSELoss":          "nn.MSELoss()",
@@ -297,17 +239,14 @@ class CodeGenerator:
             "NLLLoss":          "nn.NLLLoss()",
             "SmoothL1Loss":     "nn.SmoothL1Loss()",
         }
-
         OPTIM_MAP = {
             "Adam":     "torch.optim.Adam",
             "SGD":      "torch.optim.SGD",
             "AdamW":    "torch.optim.AdamW",
             "RMSprop":  "torch.optim.RMSprop",
         }
-
         loss_expr = LOSS_MAP.get(loss_fn, f"nn.{loss_fn}()")
         optim_cls = OPTIM_MAP.get(optimizer, f"torch.optim.{optimizer}")
-
         return [
             "",
             f"    criterion = {loss_expr}",
@@ -323,5 +262,5 @@ class CodeGenerator:
             f"        optimizer.zero_grad()",
             f"        loss.backward()",
             f"        optimizer.step()",
-            f"        print(f'Epoch {{epoch+1}}/{epochs}, Loss: {{loss.item():.4f}}')",
+            f"        print(f'Epoch { epoch+1} /{epochs}, Loss: { loss.item():.4f} ')",
         ]

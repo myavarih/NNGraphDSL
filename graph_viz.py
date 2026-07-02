@@ -1,11 +1,8 @@
 """
 Graphviz DOT visualization of the NNGraph model graph.
-
 Usage:
     dot_source = generate_dot(nodes, edges, input_id, output_id, model_name, shapes=None)
 """
-
-
 NODE_COLORS = {
     "__input__":     "#4CAF50",
     "Linear":        "#2196F3",
@@ -33,14 +30,9 @@ NODE_COLORS = {
     "Residual":      "#FF5722",
     "Split":         "#FF5722",
 }
-
 DEFAULT_COLOR = "#BDBDBD"
-
-
 def _escape(s):
     return s.replace('"', '\\"').replace('\n', '\\n')
-
-
 def _node_label(node_id, info, shapes):
     layer = info["type"]
     if layer == "__input__":
@@ -53,31 +45,24 @@ def _node_label(node_id, info, shapes):
         label = f"{node_id}\\n{layer}"
         if params_str:
             label += f"\\n{params_str}"
-
     if shapes and node_id in shapes and shapes[node_id] is not None:
         label += f"\\nshape: {shapes[node_id]}"
-
     return label
-
-
 def generate_dot(nodes, edges, input_id, output_id, model_name, shapes=None):
     lines = [
-        f'digraph "{_escape(model_name)}" {{',
+        f'digraph "{_escape(model_name)}" { ',
         '    rankdir=TB;',
         '    node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=10];',
         '    edge [fontname="Helvetica", fontsize=8];',
         '',
     ]
-
     for node_id, info in nodes.items():
         color = NODE_COLORS.get(info["type"], DEFAULT_COLOR)
         label = _node_label(node_id, info, shapes)
         peripheries = 2 if node_id == output_id else 1
         lines.append(f'    "{_escape(node_id)}" [label="{label}", fillcolor="{color}", '
                      f'fontcolor="white", peripheries={peripheries}];')
-
     lines.append('')
-
     for e in edges:
         attrs = []
         if e.get("label"):
@@ -85,6 +70,5 @@ def generate_dot(nodes, edges, input_id, output_id, model_name, shapes=None):
             attrs.append('style=dashed')
         attr_str = f' [{", ".join(attrs)}]' if attrs else ''
         lines.append(f'    "{_escape(e["src"])}" -> "{_escape(e["dst"])}"{attr_str};')
-
     lines.append('}')
     return '\n'.join(lines) + '\n'

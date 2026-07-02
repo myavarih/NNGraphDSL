@@ -24,7 +24,7 @@ graph {
 config {
     batch_size = 64
     device = "cuda"
-    loss = "NLLLoss"
+    loss = "MSELoss"
     optimizer = "Adam"
     lr = 0.001
     epochs = 5

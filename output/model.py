@@ -2,46 +2,34 @@ import torch
 import torch.nn as nn
 
 
-class ResBlock(nn.Module):
+class TransformerEncoder(nn.Module):
     def __init__(self):
-        super(ResBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.bn1 = nn.BatchNorm2d(num_features=64)
-        self.relu1 = nn.ReLU()
-        self.conv2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.bn2 = nn.BatchNorm2d(num_features=64)
-        self.relu2 = nn.ReLU()
-        self.out = nn.Flatten()
+        super(TransformerEncoder, self).__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=128, num_heads=8, batch_first=True)
+        self.drop1 = nn.Dropout(p=0.1)
+        self.norm1 = nn.LayerNorm(normalized_shape=128)
+        self.ff1 = nn.Linear(in_features=128, out_features=512)
+        self.gelu1 = nn.GELU()
+        self.drop2 = nn.Dropout(p=0.1)
+        self.ff2 = nn.Linear(in_features=512, out_features=128)
+        self.norm2 = nn.LayerNorm(normalized_shape=128)
+        self.out = nn.Flatten(start_dim=0, end_dim=1)
 
     def forward(self, x):
-        conv1 = self.conv1(x)
-        conv1 = self.bn1(conv1)
-        conv1 = self.relu1(conv1)
-        conv1 = self.conv2(conv1)
-        conv1 = self.bn2(conv1)
-        x = conv1 + x
-        x = self.relu2(x)
+        attn, _ = self.attn(x, x, x)
+        attn = self.drop1(attn)
+        norm1 = self.norm1(x + attn)  # residual_1
+        ff1 = self.ff1(norm1)
+        ff1 = self.gelu1(ff1)
+        ff1 = self.drop2(ff1)
+        ff1 = self.ff2(ff1)
+        x = self.norm2(norm1 + ff1)  # residual_2
         x = self.out(x)
         return x
 
 
 if __name__ == '__main__':
     device = torch.device('cpu')
-    model = ResBlock().to(device)
-    x = torch.randn(32, 64, 32, 32).to(device)
+    model = TransformerEncoder().to(device)
+    x = torch.randn(1, 512, 128).to(device)
     print(model(x).shape)
-
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
-
-    # Training loop
-    model.train()
-    for epoch in range(3):
-        x = torch.randn(32, 64, 32, 32).to(device)
-        y = model(x)
-        target = torch.zeros_like(y)
-        loss = criterion(y, target)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        print(f'Epoch {epoch+1}/3, Loss: {loss.item():.4f}')

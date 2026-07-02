@@ -18,12 +18,12 @@ class TransformerEncoder(nn.Module):
     def forward(self, x):
         attn, _ = self.attn(x, x, x)
         attn = self.drop1(attn)
-        norm1 = self.norm1(x + attn)
+        norm1 = self.norm1(x + attn)  # residual_1
         ff1 = self.ff1(norm1)
         ff1 = self.gelu1(ff1)
         ff1 = self.drop2(ff1)
         ff1 = self.ff2(ff1)
-        x = self.norm2(norm1 + ff1)
+        x = self.norm2(norm1 + ff1)  # residual_2
         x = self.out(x)
         return x
 

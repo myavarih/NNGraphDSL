@@ -30,7 +30,7 @@ if __name__ == '__main__':
     x = torch.randn(64, 784).to(device)
     print(model(x).shape)
 
-    criterion = nn.NLLLoss()
+    criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     # Training loop

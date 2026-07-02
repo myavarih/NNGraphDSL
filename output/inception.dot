@@ -1,0 +1,25 @@
+digraph "InceptionBlock" {
+    rankdir=TB;
+    node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=10];
+    edge [fontname="Helvetica", fontsize=8];
+
+    "x" [label="x\n(input)\nshape: (32, 56, 56)", fillcolor="#4CAF50", fontcolor="white", peripheries=1];
+    "convA1" [label="convA1\nConv2d\nin_ch=32, out_ch=16, kernel=1, stride=1, padding=0\nshape: (16, 56, 56)", fillcolor="#FF9800", fontcolor="white", peripheries=1];
+    "reluA" [label="reluA\nReLU\nshape: (16, 56, 56)", fillcolor="#8BC34A", fontcolor="white", peripheries=1];
+    "convB1" [label="convB1\nConv2d\nin_ch=32, out_ch=16, kernel=1, stride=1, padding=0\nshape: (16, 56, 56)", fillcolor="#FF9800", fontcolor="white", peripheries=1];
+    "convB2" [label="convB2\nConv2d\nin_ch=16, out_ch=32, kernel=3, stride=1, padding=1\nshape: (32, 56, 56)", fillcolor="#FF9800", fontcolor="white", peripheries=1];
+    "reluB" [label="reluB\nReLU\nshape: (32, 56, 56)", fillcolor="#8BC34A", fontcolor="white", peripheries=1];
+    "cat1" [label="cat1\nConcat\ndim=1\nshape: (48, 56, 56)", fillcolor="#FF5722", fontcolor="white", peripheries=1];
+    "bn1" [label="bn1\nBatchNorm2d\nnum_features=48\nshape: (48, 56, 56)", fillcolor="#9C27B0", fontcolor="white", peripheries=1];
+    "out" [label="out\nReLU\nshape: (48, 56, 56)", fillcolor="#8BC34A", fontcolor="white", peripheries=2];
+
+    "x" -> "convA1";
+    "convA1" -> "reluA";
+    "x" -> "convB1";
+    "convB1" -> "convB2";
+    "convB2" -> "reluB";
+    "reluA" -> "cat1";
+    "reluB" -> "cat1";
+    "cat1" -> "bn1";
+    "bn1" -> "out";
+}

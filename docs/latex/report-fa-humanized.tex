@@ -1,0 +1,1111 @@
+% NNGraph DSL -- Persian LaTeX Report
+% Compile: xelatex -shell-escape report-fa-humanized.tex  (run twice)
+
+\documentclass{nngraph-fa}
+
+\usepackage{xepersian}
+
+\settextfont[
+    BoldFont       = Vazirmatn Bold,
+    ItalicFont     = Vazirmatn,
+    BoldItalicFont = Vazirmatn Bold,
+]{Vazirmatn}
+\setdigitfont{Vazirmatn}
+\setmonofont{Liberation Mono}
+
+% ----------------------------------------------------------------
+\title{
+    \textbf{کامپایلر \LR{NNGraph DSL}} \\[0.5em]
+    \large یک زبان دامنه‌محور برای توصیف معماری شبکه‌های عصبی \\
+    و تولید خودکار کد \LR{PyTorch}
+}
+\author{\large گزارش فنی پروژه}
+\date{\today}
+
+% ----------------------------------------------------------------
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ================================================================
+\chapter*{چکیده}
+\markboth{چکیده}{چکیده}
+\addcontentsline{toc}{chapter}{چکیده}
+
+راستش \LR{NNGraph DSL} یه زبان دامنه‌محور باحاله که ما برای توصیف معماری شبکه‌های عصبی به شکل گراف جهت‌دار طراحیش کردیم
+فایل‌های \code{.nng} رو می‌دیم بهش و اونم برامون کد اجرایی \LR{PyTorch} تولید می‌کنه که یه زیرکلاس \code{nn.Module} تر و تمیز با متدهای \code{\_\_init\_\_} و \code{forward} می‌ده بیرون
+
+برای کامپایلر رفتیم سراغ \LR{ANTLR4} نسخه ۴.۱۳.۲ و از الگوی \LR{Listener} برای تحلیل معنایی استفاده کردیم
+یه الگوریتم مرتب‌سازی توپولوژیک \LR{Kahn} هم زدیم تنگش که هم تو تحلیل‌گر معنایی (واسه تشخیص دور) و هم تو تولید کد (واسه ترتیب اجرا) حسابی به کارمون میاد
+تازه استنتاج شکل تنسور، کشیدن گراف با \LR{Graphviz}، داربست آموزش، حاشیه‌نویسی کوانتیزاسیون و خروجی \LR{ONNX} رو هم بهش اضافه کردیم
+
+تو بخش تست هم ۵۵ تا تست تو چهار تا فایل نوشتیم
+چهار تا معماری باحال مثل \LR{MLP}، \LR{ResBlock}، \LR{InceptionBlock} و \LR{TransformerEncoder} رو هم کامپایل کردیم و \LR{forward pass} شون رو با شکل خروجی درست اجرا کردیم
+
+% ================================================================
+\chapter{مقدمه}
+
+\section{انگیزه}
+
+نوشتن زیرکلاس‌های \code{nn.Module} تو \LR{PyTorch} واسه معماری‌های پیچیده خیلی رو اعصابه و کلی باگ میده
+مثلاً واسه یه شبکه ده لایه، ما باید:
+
+\begin{itemize}
+    \item تو \code{\_\_init\_\_} هر لایه رو دستی با پارامترای خودش تعریف کنیم
+    \item تو \code{forward} هم ترتیب اجرا رو خودمون مدیریت کنیم
+    \item تو توپولوژی‌های شاخه‌دار هم باید واسه متغیرهای میانی اسم بذاریم
+    \item حواسمون باشه هیچ تنسور مشترکی قبل از اینکه استفاده بشه رو خودش بازنویسی نشه
+\end{itemize}
+
+یه نگاه به این کد \LR{PyTorch} بندازین که مجبوریم دستی بنویسیم:
+
+\begin{codebox}{نمونه boilerplate دستی برای یک ResBlock}{code-resblock-manual}
+\begin{amzcode}{python}
+class ResBlock(nn.Module):
+    def __init__(self):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels=64, out_channels=64,
+            kernel_size=3, stride=1, padding=1)
+        self.bn1   = nn.BatchNorm2d(num_features=64)
+        self.relu1 = nn.ReLU()
+        # ... and so on for each layer
+
+    def forward(self, x):
+        identity = x
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        # ... manage residual connection manually
+        x = x + identity
+        return x
+\end{amzcode}
+\end{codebox}
+
+با \LR{NNGraph DSL}، ما معماری رو یه بار مثل یه گراف توصیف می‌کنیم و کامپایلر بقیه کدها رو برامون تولید می‌کنه
+
+\section{هدف}
+
+هدف ما از \LR{NNGraph DSL} اینه که فایل \code{.nng} بشه تنها جایی که معماری رو توش نگه می‌داریم
+اینطوری گراف رو توصیف می‌کنیم و کامپایلر کل اون کدهای تکراری رو خودش برامون می‌سازه
+
+\section{دامنه کاربرد}
+
+به نظرم این ابزار واسه معماری‌های ثابت خیلی جوابه، یعنی شبکه‌هایی که گراف محاسباتی‌شون همون اول کار معلومه
+البته واسه نسخه‌های بعدی تو برنامه‌مون هست که کنترل جریان پویا تو \code{forward} رو هم اضافه کنیم
+
+% ================================================================
+\chapter{کارهای مرتبط}
+
+\section{چارچوب NADER}
+
+\begin{dfnbox}{NADER}{nader}
+\dfntxt{\LR{NADER}} (\LR{neural architecture design via representation})
+یه چارچوبه که ما باهاش معماری شبکه‌های عصبی رو به شکل یه گراف محاسباتی جهت‌دار (\LR{DAG}) مدل می‌کنیم
+اینجا هر گره یه عملیات لایه‌ست و هر یال هم جریان تنسور رو نشون میده
+\end{dfnbox}
+
+ما تو \LR{NNGraph DSL} همین مدل گراف رو پایه کارمون قرار دادیم
+
+\section{ANTLR4}
+
+\begin{dfnbox}{ANTLR4}{antlr4}
+\dfntxt{\LR{ANTLR4}} (\LR{another tool for language recognition})
+یه ابزار خفنه که از رو فایل گرامر \code{.g4} برامون \LR{lexer}، \LR{parser} و \LR{listener/visitor} رو خودکار می‌سازه
+نسخه‌ای که ما استفاده کردیم \LR{ANTLR 4.13.2} هست
+\end{dfnbox}
+
+\subsection{الگوی Listener در برابر Visitor}
+
+کلاً \LR{ANTLR4} دو تا الگو واسه پیمایش درخت تجزیه داره:
+
+\begin{itemize}
+    \item \textbf{\LR{listener}}: اینجا \code{ParseTreeWalker} خودش درخت رو پیمایش می‌کنه و متدهای \code{enter*/exit*} رو صدا می‌زنه
+    نیازی هم نیست چیزی برگردونه
+    \item \textbf{\LR{visitor}}: تو این یکی ما خودمون پیمایش رو دست می‌گیریم و هر متدی یه چیزی برمی‌گردونه
+\end{itemize}
+
+\begin{notebox}
+ما تو این کامپایلر از الگوی \LR{Listener} استفاده کردیم
+متدهای \code{exit*} تو فایل \code{custom\_listener.py} وضعیت رو تو \code{self.nodes} و \code{self.edges} نگه می‌دارن، که به نظرم واسه ساختن گراف از رو درخت خیلی طبیعی‌تره
+\end{notebox}
+
+\section{ابزارها و تجسم‌سازهای AST}
+
+واسه این کامپایلر ما از ابزارهای استاندارد درخت نحو انتزاعی (\LR{AST}) واسه بازرسی و دیدن درخت استفاده کردیم
+کلاً سه تا فایل واسه این کار داریم:
+
+\begin{itemize}
+    \item \code{ast.py} --- کلاس \code{AST} و \code{TreeNode}
+    \item \code{make\_ast\_subtree.py} --- ترکیب گره‌های درخت تجزیه
+    \item \code{ast\_to\_networkx\_graph.py} --- کشیدن گراف به صورت اختیاری
+\end{itemize}
+
+\subsection{چرا AST در اینجا استفاده نمی‌شود}
+
+بیشتر کامپایلرا برنامه‌ها رو به صورت درخت نحو انتزاعی (\LR{AST}) نشون می‌دن
+زبان‌هایی که رو عبارت‌ها می‌چرخن، خیلی راحت به ساختار درختی تبدیل می‌شن
+
+اما داستان \LR{NNGraph DSL} فرق داره
+ما معماری شبکه‌های عصبی رو مثل یه گراف جهت‌دار بدون دور (\LR{DAG}) می‌بینیم
+گره‌ها همون لایه‌ها هستن و یال‌ها هم جریان تنسورها رو نشون می‌دن
+مدل ما اینجا خود گرافه، نه درخت تجزیه
+
+واسه همین ما کلی عملیات گرافی انجام می‌دیم که به لیست مجاورت و یال‌ها نیاز دارن:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{مرتب‌سازی توپولوژیک} (الگوریتم \LR{Kahn}) واسه ترتیب اجرا تو \code{forward()}
+    \item \textbf{تشخیص دور} با مرتب‌سازی توپولوژیک (واسه اینکه مطمئن بشیم \LR{DAG} ما درسته)
+    \item \textbf{تحلیل دسترس‌پذیری} با یه \LR{BFS} مشتی از ورودی تا خروجی
+    \item \textbf{اعتبارسنجی اتصال باقی‌مانده} (چک کردن درجه ورودی گره‌های ادغام)
+    \item \textbf{استنتاج شکل} با انتشار شکل تنسورها رو یال‌ها
+    \item \textbf{خروجی \LR{Graphviz DOT}} واسه اینکه معماری رو قشنگ ببینیم
+    \item \textbf{خروجی \LR{ONNX}} (که خودش بر اساس فرمت گرافه)
+\end{itemize}
+
+یه \LR{AST} فقط سلسله مراتب درخت تجزیه رو به ما می‌ده (\code{model\_block}، \code{graph\_block}، \code{node\_decl})، اما گراف محاسباتی که ما می‌خوایم رو قایم می‌کنه
+واسه همین تحلیل‌گر معنایی ما گره‌ها و یال‌ها رو مستقیم تو دیکشنری‌ها و لیست‌ها ذخیره می‌کنه که واسه الگوریتم‌های گراف خیلی بهتره
+
+\begin{notebox}
+کدای ساخت \LR{AST} (\code{exitEveryRule}، \code{exitStart}) تو \code{custom\_listener.py} فقط واسه دیباگ اختیاری با پرچم \code{-{}-show-ast} اونجا هستن و موقع کامپایل اصلاً کاری به کارشون نداریم
+\end{notebox}
+
+% ================================================================
+\chapter{طراحی زبان}
+
+\section{ساختار برنامه}
+
+هر فایل \code{.nng} کلاً سه تا بلوک داره
+بلوک \code{config} هم که اختیاریه:
+
+\begin{codebox}{ساختار کلی یک فایل .nng}{code-structure}
+\begin{amzcode}{text}
+model <Name> {
+    input  <id> : tensor(<shape>)
+    output <id>
+}
+
+graph {
+    node <id> : <LayerType>(<params>)
+    ...
+    edge <src> -> <dst>
+    edge <src> -> <dst> [label="<string>"]
+    ...
+}
+
+config {
+    batch_size = <int>
+    device     = "cpu" | "cuda"
+    loss       = "<LossFn>"       // enables training scaffold
+    optimizer  = "<Optimizer>"    // Adam | SGD | AdamW | RMSprop
+    lr         = <float>          // learning rate
+    epochs     = <int>            // training epochs
+}
+\end{amzcode}
+\end{codebox}
+
+\begin{dfnbox}{بلوک model}{block-model}
+بلوک \code{model} اسم کلاس تولیدشده، شناسه گره ورودی و شکل تنسور ورودی، و شناسه گره خروجی رو مشخص می‌کنه
+\end{dfnbox}
+
+\begin{dfnbox}{بلوک graph}{block-graph}
+ما تو بلوک \code{graph} همه گره‌های لایه و یال‌های جهت‌دار رو تعریف می‌کنیم
+ترتیب نوشتن یال‌ها اصلاً مهم نیست چون کامپایلر خودش ترتیب اجرا رو از رو ساختار گراف درمیاره
+\end{dfnbox}
+
+\begin{dfnbox}{بلوک config}{block-config}
+بلوک \code{config} واسه تعیین یه سری مقادیر تو بلوک \code{\_\_main\_\_} کد تولیدشده به کار میره
+مثلاً \code{batch\_size} پیش‌فرضش ۱ هست و \code{device} هم \code{'cpu'}
+اگه کلید \code{loss} رو تنظیم کنیم، مولد کد برامون یه حلقه آموزش کامل با بهینه‌ساز و تابع خطا می‌سازه
+\end{dfnbox}
+
+\section{گرامر}
+
+\begin{dfnbox}{آمار گرامر NNGraph.g4}{grammar-stats}
+\begin{itemize}[noitemsep]
+    \item فایل گرامر: \code{NNGraph.g4} (۵۶ خط)
+    \item قوانین تجزیه‌گر: ۱۴ تا قانون (\LR{snake\_case})
+    \item توکن‌های واژه‌نگار: ۲۰ تا توکن (\LR{ALL\_CAPS})
+\end{itemize}
+\end{dfnbox}
+
+قوانین کامل گرامر هم ایناست:
+
+\begin{codebox}{گرامر NNGraph.g4}{code-grammar}
+\begin{amzcode}{antlr}
+grammar NNGraph;
+start     : model_block graph_block config_block? EOF;
+model_block : MODEL ID '{' input_decl output_decl '}';
+input_decl  : INPUT ID ':' TENSOR shape_expr;
+output_decl : OUTPUT ID;
+graph_block : GRAPH '{' (node_decl | edge_decl)* '}';
+node_decl   : NODE ID ':' layer_expr;
+layer_expr  : ID '(' param_list? ')';
+param_list  : param (',' param)*;
+param       : ID '=' value;
+edge_decl   : EDGE ID ARROW ID ('[' LABEL '=' STRING ']')?;
+config_block: CONFIG '{' config_entry* '}';
+config_entry: ID '=' value;
+value       : FLOAT_LITERAL | INT_LITERAL | BOOL_LITERAL
+            | STRING | NONE | shape_expr;
+shape_expr  : '(' INT_LITERAL (',' INT_LITERAL)* ')';
+\end{amzcode}
+\end{codebox}
+
+\begin{notebox}
+\textbf{نکته مهم طراحی:} واسه \code{input\_decl} ما از \code{TENSOR shape\_expr} استفاده کردیم نه \code{TENSOR '(' shape\_expr ')'} چون \code{shape\_expr} خودش پرانتز داره
+اینطوری از یه باگ رایج که تو نسخه‌های اولیه‌مون داشتیم جلوگیری کردیم
+\end{notebox}
+
+\section{سیستم انواع}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{نوع در DSL} & \textbf{نوع Python} & \textbf{مثال} \\
+\midrule
+\code{int}    & \code{int}        & \code{128} \\
+\code{float}  & \code{float}      & \code{0.1} \\
+\code{bool}   & \code{bool}       & \code{true} / \code{false} \\
+\code{string} & \code{str}        & \code{"relu"} \\
+\code{shape}  & \code{tuple[int]} & \code{(64, 32, 32)} \\
+\code{None}   & \code{NoneType}   & \code{None} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+ما تمایز بین \code{int} و \code{float} رو همون زمان کامپایل چک می‌کنیم
+مثلاً اگه بنویسیم \code{Dropout(p=1)} بهمون ارور می‌ده چون \code{p} منتظر یه \code{float} هست نه \code{int}
+
+\section{انواع لایه}
+
+\subsection{لایه‌های پارامتردار}
+
+این لایه‌ها موقع ساخت \code{\_\_init\_\_} به شکل \code{self.<id> = nn.X(...)} تو کدمون جا می‌گیرن
+
+\begin{center}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{کلیدواژه DSL} & \textbf{کلاس PyTorch} & \textbf{پارامترهای اصلی} \\
+\midrule
+\code{Linear}        & \code{nn.Linear}             & \code{in\_features}, \code{out\_features}, \code{bias} \\
+\code{Conv2d}        & \code{nn.Conv2d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride}, \code{padding} \\
+\code{Conv1d}        & \code{nn.Conv1d}             & \code{in\_ch}, \code{out\_ch}, \code{kernel}, \code{stride} \\
+\code{BatchNorm2d}   & \code{nn.BatchNorm2d}        & \code{num\_features} \\
+\code{LayerNorm}     & \code{nn.LayerNorm}          & \code{normalized\_shape} \\
+\code{MaxPool2d}     & \code{nn.MaxPool2d}          & \code{kernel}, \code{stride} \\
+\code{AvgPool2d}     & \code{nn.AvgPool2d}          & \code{kernel}, \code{stride} \\
+\code{Dropout}       & \code{nn.Dropout}            & \code{p} \\
+\code{Flatten}       & \code{nn.Flatten}            & \code{start\_dim}, \code{end\_dim} \\
+\code{Embedding}     & \code{nn.Embedding}          & \code{num\_embeddings}, \code{embedding\_dim} \\
+\code{MultiHeadAttn} & \code{nn.MultiheadAttention} & \code{embed\_dim}, \code{num\_heads} \\
+\code{LSTM}          & \code{nn.LSTM}               & \code{input\_size}, \code{hidden\_size}, \code{num\_layers} \\
+\code{GRU}           & \code{nn.GRU}                & \code{input\_size}, \code{hidden\_size} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{فعال‌سازی‌ها}
+
+\code{ReLU}، \code{Sigmoid}، \code{Tanh}، \code{GELU}، \code{Softmax(dim)}، \code{LeakyReLU(negative\_slope)} و \code{ELU(alpha)}
+
+\subsection{عملیات گراف (بدون ماژول)}
+
+اینا دیگه تو \code{\_\_init\_\_} خطی تولید نمی‌کنن:
+
+\begin{center}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{کلیدواژه} & \textbf{پارامترها} & \textbf{کد تولیدشده} \\
+\midrule
+\code{Add}      & ---                          & \code{out = a + b} \\
+\code{Concat}   & \code{dim: int}              & \code{out = torch.cat([a,b], dim=d)} \\
+\code{Residual} & ---                          & \code{out = main + shortcut} \\
+\code{Split}    & \code{chunks: int, dim: int} & \code{split\_0, split\_1, ... = torch.chunk(x,n,dim=d)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{پارامترهای سراسری}
+
+یه پارامتر باحال به اسم \code{quant} داریم که رو هر گرهی می‌تونیم بذاریم
+مقادیری که قبول می‌کنه ایناست: \code{"dynamic"}، \code{"static"} و \code{"qat"}
+
+\begin{codebox}{نمونه استفاده از کوانتیزاسیون}{code-quant-example}
+\begin{amzcode}{text}
+node fc1 : Linear(in_features=784, out_features=128, quant="dynamic")
+\end{amzcode}
+\end{codebox}
+
+\section{نحو یال}
+
+\begin{dfnbox}{یال ساده}{edge-simple}
+\begin{latin}
+\texttt{edge src -> dst}
+\end{latin}
+
+اینطوری یه یال جهت‌دار از گره \code{src} به گره \code{dst} می‌سازیم
+\end{dfnbox}
+
+\begin{dfnbox}{یال برچسب‌دار}{edge-labeled}
+\begin{latin}
+\texttt{edge src -> dst [label="name"]}
+\end{latin}
+
+اینم واسه تعریف یه یال با برچسب رشته‌ایه
+ما کلاً برچسب‌ها رو واسه دو تا کار استفاده می‌کنیم:
+\begin{itemize}
+    \item \code{"shortcut"}: واسه اینکه یال اتصال کوتاه به گره \code{Residual()} رو نشون بدیم
+    \item \code{"residual\_*"}: واسه اتصال کوتاه به گرهی که دو تا ورودی داره (مثل الگوی \LR{transformer})
+\end{itemize}
+\end{dfnbox}
+
+\section{مثال کامل: MLP}
+
+فایل \code{.nng} واسه یه شبکه سه‌لایه این شکلی می‌شه:
+
+\begin{codebox}{mlp.nng}{code-mlp-full}
+\begin{amzcode}{text}
+model MLP {
+    input  x   : tensor(784)
+    output out
+}
+
+graph {
+    node fc1   : Linear(in_features=784, out_features=256)
+    node relu1 : ReLU()
+    node fc2   : Linear(in_features=256, out_features=128)
+    node relu2 : ReLU()
+    node drop  : Dropout(p=0.3)
+    node fc3   : Linear(in_features=128, out_features=10)
+    node out   : Softmax(dim=1)
+
+    edge x     -> fc1
+    edge fc1   -> relu1
+    edge relu1 -> fc2
+    edge fc2   -> relu2
+    edge relu2 -> drop
+    edge drop  -> fc3
+    edge fc3   -> out
+}
+
+config {
+    batch_size = 64
+    device = "cuda"
+}
+\end{amzcode}
+\end{codebox}
+
+و اینم کد \LR{PyTorch} که برامون تولید می‌کنه:
+
+\begin{codebox}{کد PyTorch تولیدشده برای MLP}{code-mlp-output}
+\begin{amzcode}{python}
+import torch
+import torch.nn as nn
+
+
+class MLP(nn.Module):
+    def __init__(self):
+        super(MLP, self).__init__()
+        self.fc1   = nn.Linear(in_features=784, out_features=256)
+        self.relu1 = nn.ReLU()
+        self.fc2   = nn.Linear(in_features=256, out_features=128)
+        self.relu2 = nn.ReLU()
+        self.drop  = nn.Dropout(p=0.3)
+        self.fc3   = nn.Linear(in_features=128, out_features=10)
+        self.out   = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.drop(x)
+        x = self.fc3(x)
+        x = self.out(x)
+        return x
+
+
+if __name__ == '__main__':
+    device = torch.device('cuda')
+    model  = MLP().to(device)
+    x      = torch.randn(64, 784).to(device)
+    print(model(x).shape)
+\end{amzcode}
+\end{codebox}
+
+% ================================================================
+\chapter{پیاده‌سازی}
+
+\section{معماری کامپایلر}
+
+\begin{dfnbox}{خط لوله کامپایل}{pipeline}
+ما خط لوله کامپایلر رو تو شش تا مرحله چیدیم:
+\begin{enumerate}
+    \item \textbf{تجزیه}: \code{FileStream} $\to$ \code{NNGraphLexer} $\to$ \code{NNGraphParser.program()} $\to$ درخت تجزیه
+    \item \textbf{تحلیل معنایی}: \code{ParseTreeWalker} + \code{NNGraphCustomListener} $\to$ مدل گراف
+    \item \textbf{مرتب‌سازی توپولوژیک}: اینجا با الگوریتم \LR{Kahn} ترتیب اجرا رو درمیاریم
+    \item \textbf{استنتاج شکل}: شکل تنسورها رو تو گراف پخش می‌کنیم و اگه مشکلی بود مچش رو می‌گیریم (اختیاری: \code{-{}-show-shapes})
+    \item \textbf{تولید کد}: \code{CodeGenerator.generate()} $\to$ رشته پایتونی
+    \item \textbf{خروجی}: تو این مرحله می‌ریزیم تو فایل \code{.py} یا یه خروجی \LR{Graphviz DOT} می‌گیریم یا کلاً خروجی \LR{ONNX} می‌دیم بیرون
+\end{enumerate}
+\end{dfnbox}
+
+\subsection{مسئولیت فایل‌ها}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{فایل} & \textbf{نقش} \\
+\midrule
+\code{NNGraph.g4}             & منبع حقیقت گرامر (۵۶ خط) \\
+\code{gen/NNGraphLexer.py}    & تولیدشده توسط ANTLR4 \\
+\code{gen/NNGraphParser.py}   & تولیدشده توسط ANTLR4 \\
+\code{gen/NNGraphListener.py} & listener پایه --- نباید ویرایش شود \\
+\code{custom\_listener.py}    & تحلیل معنایی \\
+\code{code\_generator.py}     & تولید کد PyTorch \\
+\code{shape\_inference.py}    & استنتاج شکل تنسور در کامپایل \\
+\code{graph\_viz.py}          & تولید نمودار Graphviz DOT \\
+\code{onnx\_export.py}        & صادرکردن مدل به فرمت ONNX \\
+\code{main.py}                & رابط CLI و \code{compile\_nng()} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{تحلیل‌گر معنایی}
+
+\begin{dfnbox}{NNGraphCustomListener}{custom-listener}
+ما یه کلاس \code{NNGraphCustomListener(NNGraphListener)} تو فایل \code{custom\_listener.py} داریم که کل بار تحلیل معنایی رو دوششه
+وضعیت داخلیش هم اینطوریه:
+\begin{itemize}[noitemsep]
+    \item \code{self.nodes}: \code{dict[id, \{type, params, line\}]}
+    \item \code{self.edges}: \code{list[\{src, dst, label, line\}]}
+    \item \code{self.config}: \code{dict[key, value]}
+\end{itemize}
+\end{dfnbox}
+
+\subsection{انتشار مقدار در درخت}
+
+متدهای \code{exitShape\_expr} و \code{exitValue} مقادیر رو روی خود \LR{context} می‌نویسن:
+
+\begin{codebox}{انتشار مقدار ctx.pvalue در exitShape\_expr}{code-propagation}
+\begin{amzcode}{python}
+def exitShape_expr(self, ctx):
+    ints = [int(ctx.INT_LITERAL(i).getText())
+            for i in range(ctx.INT_LITERAL().__len__())]
+    ctx.pvalue = tuple(ints)
+    ctx.ptype  = tuple
+\end{amzcode}
+\end{codebox}
+
+این روش به ما اطمینان می‌ده که وقتی از یه \LR{context} میایم بیرون، مقادیر بچه‌هاش دم دستمون باشن
+
+\subsection{قوانین اعتبارسنجی}
+
+ما هشت تا قانون اعتبارسنجی داریم که تو دو تا فاز اجراشون می‌کنیم:
+
+\textbf{فاز اول (همون موقعی که داریم درخت رو بالا پایین می‌کنیم):}
+\begin{enumerate}
+    \item \textbf{شناسه تکراری گره}: تو \code{exitNode\_decl} چکش می‌کنیم
+    \item \textbf{ارجاع نامعتبر در یال}: تو \code{exitEdge\_decl}
+    \item \textbf{نوع لایه ناشناس}: تو \code{exitNode\_decl}
+    \item \textbf{عدم تطابق نوع پارامتر}: بازم تو \code{exitNode\_decl}
+\end{enumerate}
+
+\textbf{فاز دوم (وقتی گرافمون کامل شد تو \code{exitGraph\_block}):}
+\begin{enumerate}
+    \setcounter{enumi}{4}
+    \item \textbf{گره خروجی اعلان‌نشده}: تو \code{\_validate\_output\_declared}
+    \item \textbf{گره یتیم}: تو \code{\_validate\_orphans} مچش رو می‌گیریم
+    \item \textbf{آریتی residual != 2}: تو \code{\_validate\_residual\_arity}
+    \item \textbf{تشخیص دور با kahn}: تو \code{\_validate\_no\_cycles}
+    \item \textbf{قابلیت دسترسی BFS}: تو \code{\_validate\_reachability}
+\end{enumerate}
+
+\subsection{قالب پیام خطا}
+
+\begin{codebox}{قالب خطا}{code-error-format}
+\begin{amzcode}{text}
+[line L:C] SemanticError: <message>
+[line L] ShapeError at '<node>': <message>
+\end{amzcode}
+\end{codebox}
+
+اینجا \code{L} همون شماره خطه و \code{C} هم ستون توکنمونه
+اگه به هر کدوم از این خطاها بخوریم، کامپایل متوقف می‌شه و با کد خروج ۱ می‌پریم بیرون
+
+\subsection{\_FakeCtx برای خطاهای پس از پیمایش}
+
+خطاهایی که تو \code{exitGraph\_block} پیش میان \LR{context} زنده ندارن
+واسه همین ما یه کلاس جمع‌وجور به اسم \code{\_FakeCtx} ساختیم که شماره خط رو از گره برداره و با خودش بیاره:
+
+\begin{codebox}{کلاس \_FakeCtx برای حفظ شماره خط}{code-fakectx}
+\begin{amzcode}{python}
+class _FakeCtx:
+    class start:
+        line   = info["line"]
+        column = 0
+\end{amzcode}
+\end{codebox}
+
+\subsection{جریان اجرای شنونده}
+
+متد \code{ParseTreeWalker.walk(listener, parse\_tree)} یه پیمایش عمق‌اول روی درختمون می‌زنه و قبل از اینکه بره سراغ بچه‌ها متد \code{enterX(ctx)} رو صدا می‌زنه و بعدش \code{exitX(ctx)} رو
+
+\begin{dfnbox}{فراخوانی واکر در main.py}{walker-invoke}
+\begin{amzcode}{python}
+listener = NNGraphCustomListener()
+listener.rule_names = parser.ruleNames
+walker = ParseTreeWalker()
+walker.walk(listener, parse_tree)
+\end{amzcode}
+\end{dfnbox}
+
+اینجا شنونده سفارشی ما فقط متدهای \code{exit*} رو بازنویسی می‌کنه
+متدهای \code{enter*} رو هم همونجوری بدون تغییر از کلاس پایه \code{NNGraphListener} نگه می‌داریم
+
+\subsubsection{انتشار ویژگی‌ها (پایین به بالا)}
+
+ما مقادیر رو از طریق ویژگی‌های کانتکست می‌فرستیم بالا تو درخت:
+
+\begin{codebox}{متد exitValue مقدار پارس‌شده را در ctx.pvalue ذخیره می‌کند}{code-exitvalue}
+\begin{amzcode}{python}
+def exitValue(self, ctx):
+    if ctx.FLOAT_LITERAL():
+        ctx.pvalue = float(ctx.FLOAT_LITERAL().getText())
+        ctx.ptype  = float
+    elif ctx.INT_LITERAL():
+        ctx.pvalue = int(ctx.INT_LITERAL().getText())
+        ctx.ptype  = int
+    elif ctx.BOOL_LITERAL():
+        ctx.pvalue = ctx.BOOL_LITERAL().getText() == 'true'
+        ctx.ptype  = bool
+    # ... other cases
+\end{amzcode}
+\end{codebox}
+
+اینطوری قوانین والد هم می‌تونن ویژگی‌های بچه‌هاشون رو بخونن:
+
+\begin{codebox}{متد exitParam مقدار ctx.value().pvalue را از فرزند می‌خواند}{code-exitparam}
+\begin{amzcode}{python}
+def exitParam(self, ctx):
+    ctx.param_name  = ctx.ID().getText()
+    ctx.param_value = ctx.value().pvalue
+    ctx.param_type  = ctx.value().ptype
+\end{amzcode}
+\end{codebox}
+
+\subsubsection{استخراج معنایی و شرح تفصیلی رفتار متدها}
+
+شنونده سفارشی ما با یه سری متد \code{exit*} کار می‌کنه که از پایین به بالا میان
+اینجا براتون باز می‌کنم که هر تابع شنونده دقیقاً چه کاری می‌کنه:
+
+\begin{itemize}
+    \item \textbf{\code{exitShape\_expr(ctx)}}: این میاد لیستی از ابعاد رو از توکن‌های \code{INT\_LITERAL} پارس می‌کنه و یه \code{tuple} می‌سازه، بعدم می‌ریزه تو \code{ctx.pvalue} و نوعشم می‌ذاره \code{tuple}
+    \item \textbf{\code{exitValue(ctx)}}: مقادیر لیتراال رو ارزیابی می‌کنه و تبدیلشون می‌کنه به معادل پایتونی‌شون و می‌ریزه تو \code{ctx.pvalue}
+    \item \textbf{\code{exitModel\_block(ctx)}}: شناسه مدل شبکه رو از \code{ctx.ID().getText()} درمیاره و می‌ذاره تو \code{self.model\_name}
+    \item \textbf{\code{exitInput\_decl(ctx)}}: شناسه متغیر ورودی رو تو \code{self.input\_id} و شکل پارس‌شده‌ش رو تو \code{self.input\_shape} ذخیره می‌کنه
+    تازه یه شبه‌گره \code{"\_\_input\_\_"} هم می‌سازه واسه اعتبارسنجی
+    \item \textbf{\code{exitOutput\_decl(ctx)}}: شناسه خروجی رو نگه می‌داره تا بدونیم ته‌مون کجاست
+    \item \textbf{\code{exitParam(ctx)}}: پارامترها رو هندل می‌کنه و شناسه و مقدار و نوعشون رو ذخیره می‌کنه
+    \item \textbf{\code{exitLayer\_expr(ctx)}}: پیکربندی‌های سازنده لایه رو می‌گیره و پارامترهاشون رو مپ می‌کنه
+    \item \textbf{\code{exitNode\_decl(ctx)}}: گره‌ها رو ثبت می‌کنه و چک می‌کنه شناسه تکراری نباشه و پارامترها هم به \code{LAYER\_SCHEMA} بخورن
+    \item \textbf{\code{exitEdge\_decl(ctx)}}: یال‌ها رو پردازش می‌کنه و چک می‌کنه که مبدأ و مقصد تو \code{self.nodes} باشن و بعد یال رو ثبت می‌کنه
+    \item \textbf{\code{exitConfig\_entry(ctx)}}: تنظیمات سراسری مثل \code{device} یا \code{batch\_size} رو می‌گیره می‌ذاره تو \code{self.config}
+    \item \textbf{\code{exitGraph\_block(ctx)}}: وقتی گراف کامل شد می‌پره وسط و اون پنج تا مرحله اعتبارسنجی که قبلاً گفتم رو اجرا می‌کنه
+    \item \textbf{\code{exitEveryRule(ctx)}}: خروج از قوانین رو ردگیری می‌کنه و اگه لازم بود \code{make\_ast\_subtree} رو صدا می‌زنه
+    \item \textbf{\code{exitStart(ctx)}}: کار درخت \LR{AST} رو نهایی می‌کنه
+\end{itemize}
+
+\subsubsection{الگوریتم‌های اعتبارسنجی گراف}
+
+متد \code{exitGraph\_block} وقتی گراف ساخته شد این پنج تا کار رو می‌کنه:
+
+\textbf{۱. تشخیص گره یتیم} (\code{\_validate\_orphans}):
+
+\begin{codebox}{الگوریتم تشخیص گره یتیم}{code-orphan}
+\begin{amzcode}{python}
+referenced = set()
+for e in self.edges:
+    referenced.add(e["src"])
+    referenced.add(e["dst"])
+for node_id, info in self.nodes.items():
+    if info["type"] == "__input__":
+        continue
+    if node_id not in referenced:
+        error(f"Node '{node_id}' is declared but never referenced.")
+\end{amzcode}
+\end{codebox}
+
+اینجا شناسه همه گره‌هایی که تو یال‌ها هستن رو جمع می‌کنیم
+هر گرهی که تعریف شده ولی تو این یال‌ها نیست، یتیم حساب می‌شه
+
+\textbf{۲. تشخیص دور} (\code{\_validate\_no\_cycles}):
+
+اینجا رفتیم سراغ الگوریتم \LR{Kahn}
+اگه بعد از پردازش، گرهی بمونه که \code{in\_degree > 0} باشه، یعنی یه جایی دور داریم
+
+\begin{codebox}{الگوریتم Kahn برای تشخیص دور}{code-kahn}
+\begin{amzcode}{python}
+in_degree = dict.fromkeys(self.nodes, 0)
+adj       = {n: [] for n in self.nodes}
+for e in self.edges:
+    adj[e["src"]].append(e["dst"])
+    in_degree[e["dst"]] += 1
+
+queue   = deque(n for n, d in in_degree.items() if d == 0)
+visited = 0
+while queue:
+    node = queue.popleft()
+    visited += 1
+    for nxt in adj[node]:
+        in_degree[nxt] -= 1
+        if in_degree[nxt] == 0:
+            queue.append(nxt)
+
+if visited != len(self.nodes):
+    remaining = [n for n, d in in_degree.items() if d > 0]
+    error(f"Cycle detected involving nodes: {remaining}.")
+\end{amzcode}
+\end{codebox}
+
+\textbf{۳. قابلیت دسترسی} (\code{\_validate\_reachability}):
+
+یه جستجوی \LR{BFS} از گره ورودی می‌زنیم و انتظار داریم همه گره‌ها قابل دسترسی باشن
+
+\begin{codebox}{بررسی قابلیت دسترسی با BFS}{code-bfs}
+\begin{amzcode}{python}
+adj = {n: [] for n in self.nodes}
+for e in self.edges:
+    adj[e["src"]].append(e["dst"])
+
+visited = set()
+queue   = deque([self.input_id])
+while queue:
+    node = queue.popleft()
+    if node in visited:
+        continue
+    visited.add(node)
+    for nxt in adj[node]:
+        queue.append(nxt)
+
+for node_id, info in self.nodes.items():
+    if node_id not in visited and info["type"] != "__input__":
+        error(f"Node '{node_id}' is not reachable from input.")
+
+if self.output_id not in visited:
+    error(f"Output node '{self.output_id}' is not reachable.")
+\end{amzcode}
+\end{codebox}
+
+اینطوری بخش‌های جدا افتاده رو پیدا می‌کنیم
+
+\begin{notebox}
+دقت کنین که تشخیص دور و قابلیت دسترسی دو تا چیز کاملاً جدان
+ممکنه گرافمون دور نداشته باشه ولی یه تیکه‌ش کلاً جدا باشه، یا همه جاش وصل باشه ولی دور داشته باشه
+ما واسه \LR{DAG} شبکه‌مون به جفتش نیاز داریم
+\end{notebox}
+
+\section{مولد کد}
+
+\begin{dfnbox}{CodeGenerator}{codegen}
+ما کلاس \code{CodeGenerator} رو تو \code{code\_generator.py} تو چهار تا گام زدیم:
+\begin{enumerate}[noitemsep]
+    \item \code{\_compute\_graph()}: ساخت لیست‌های مجاورت و مرتب‌سازی توپولوژیک
+    \item \code{\_assign\_vars()}: تخصیص نام متغیر پایتونی به هر گره
+    \item \code{\_emit\_init()} + \code{\_emit\_forward()}: تولید خطوط کد
+    \item \code{\_assemble()}: هم‌زدن همه اینا با هم تو یه سورس نهایی پایتون
+\end{enumerate}
+\end{dfnbox}
+
+\section{الگوریتم تخصیص متغیر}
+
+\begin{dfnbox}{اصل اساسی تخصیص متغیر}{var-invariant}
+ما \code{var\_at[n] = 'x'} رو فقط موقعی می‌ذاریم که \code{out\_degree[predecessor] == 1} باشه
+
+وقتی یه گره قراره به چند جا بره (\code{out\_degree > 1})، یعنی شاخه‌های دیگه هنوز بهش نیاز دارن
+اگه همونجا \code{x} رو بازنویسی کنیم که کارمون زاره
+واسه همین، گره بعدی همون اسم شناسه خودش رو به عنوان متغیر می‌گیره
+\end{dfnbox}
+
+ما تو \code{\_assign\_vars} چهار تا قانون کلی داریم:
+
+\begin{codebox}{قوانین تخصیص متغیر در \_assign\_vars}{code-var-rules}
+\begin{amzcode}{text}
+Rule 1 - Input node:
+    var_at[input_id] = 'x'
+
+Rule 2 - Merge node (in_degree > 1):
+    var_at[n] = 'x'       if out_degree[n] <= 1
+    var_at[n] = node_id   if out_degree[n] > 1
+
+Rule 3 - Branch start (predecessor.out_degree > 1):
+    var_at[n] = node_id
+
+Rule 4 - Linear continuation (predecessor.out_degree == 1):
+    var_at[n] = var_at[predecessor]
+\end{amzcode}
+\end{codebox}
+
+\subsection{ردیابی MLP (زنجیره خطی)}
+
+\begin{exbox}{ردیابی متغیر برای MLP}{trace-mlp}
+توپولوژی شبکه این شکلیه:
+\begin{latin}
+\texttt{x -> fc1 -> relu1 -> fc2 -> relu2 -> drop -> fc3 -> out}
+\end{latin}
+
+اینجا هر گره قبلی \code{out\_degree == 1} داره، پس طبق قانون ۴ همیشه \code{var\_at = 'x'} می‌شه
+و تو \code{forward} همه‌جا از همون \code{x} استفاده می‌کنیم
+\end{exbox}
+
+\subsection{ردیابی ResBlock (فن‌اوت سپس ادغام)}
+
+\begin{exbox}{ردیابی متغیر برای ResBlock}{trace-resblock}
+ما اینجا \code{x} رو هم به \code{conv1} و هم به \code{skip} می‌فرستیم، پس \code{out\_degree[x] = 2} می‌شه
+
+\begin{itemize}
+    \item واسه \code{conv1}: قانون ۳ میگه \code{var\_at = 'conv1'}
+    \item واسه بقیه: قانون ۴ میگه همه همون \code{'conv1'} رو می‌گیرن
+    \item واسه \code{skip}: قانون ۲ میگه \code{var\_at = 'x'}
+\end{itemize}
+
+اینم کدی که تولید می‌کنه:
+\begin{codebox}{forward pass تولیدشده برای ResBlock}{code-resblock-forward}
+\begin{amzcode}{python}
+conv1 = self.conv1(x)
+conv1 = self.bn1(conv1)
+conv1 = self.relu1(conv1)
+conv1 = self.conv2(conv1)
+conv1 = self.bn2(conv1)
+x     = conv1 + x       # Residual node
+x     = self.flatten(x)
+\end{amzcode}
+\end{codebox}
+\end{exbox}
+
+\subsection{ردیابی InceptionBlock (دو شاخه موازی)}
+
+\begin{exbox}{ردیابی متغیر برای InceptionBlock}{trace-inception}
+اینجا هم \code{out\_degree[x] = 2} هست
+
+\begin{itemize}
+    \item واسه \code{convA1} و \code{convB1}: قانون ۳ بهمون \code{'convA1'} و \code{'convB1'} می‌ده
+    \item واسه \code{convA2} و \code{convB2}: قانون ۴ رو داریم
+    \item واسه \code{cat1}: قانون ۲ دوباره بهمون \code{'x'} می‌ده
+\end{itemize}
+
+کدش هم اینطوری درمیاد:
+\begin{codebox}{forward pass تولیدشده برای InceptionBlock}{code-inception-forward}
+\begin{amzcode}{python}
+convA1 = self.convA1(x)
+convA1 = self.convA2(convA1)
+convB1 = self.convB1(x)
+convB1 = self.convB2(convB1)
+x      = torch.cat([convA1, convB1], dim=1)  # Concat node
+x      = self.bn(x)
+x      = self.out(x)
+\end{amzcode}
+\end{codebox}
+\end{exbox}
+
+\subsection{ردیابی TransformerEncoder (دو residual ضمنی)}
+
+\begin{exbox}{ردیابی متغیر برای TransformerEncoder}{trace-transformer}
+اینجا وضعیت جالب‌تره، \code{out\_degree[x] = 2} و \code{out\_degree[norm1] = 2}
+
+\begin{itemize}
+    \item واسه \code{attn}: قانون ۳
+    \item واسه \code{drop1}: قانون ۴
+    \item واسه \code{norm1}: قانون ۲ بهمون \code{'norm1'} می‌ده
+    \item واسه \code{ff1}: قانون ۳
+    \item واسه \code{gelu1} و \code{drop2} و \code{ff2}: قانون ۴
+    \item واسه \code{norm2}: قانون ۲ بهمون \code{'x'} می‌ده
+\end{itemize}
+
+خروجیش این شکلیه:
+\begin{codebox}{forward pass تولیدشده برای TransformerEncoder}{code-transformer-forward}
+\begin{amzcode}{python}
+attn, _ = self.attn(x, x, x)    # MultiHeadAttn triple-pass
+attn     = self.drop1(attn)
+norm1    = self.norm1(x + attn)  # implicit residual_1
+ff1      = self.ff1(norm1)
+ff1      = self.gelu1(ff1)
+ff1      = self.drop2(ff1)
+ff1      = self.ff2(ff1)
+x        = self.norm2(norm1 + ff1) # implicit residual_2
+x        = self.out(x)
+x        = self.flatten(x)
+return x
+\end{amzcode}
+\end{codebox}
+\end{exbox}
+
+\subsection{موارد خاص تولید کد}
+
+\begin{center}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{الگو} & \textbf{شرط} & \textbf{کد تولیدشده} \\
+\midrule
+\LR{MultiHeadAttn}  & نوع لایه     & \code{out, \_ = self.attn(x, x, x)} \\
+\LR{LSTM / GRU}     & نوع لایه     & \code{out, \_ = self.lstm(x)} \\
+\LR{Residual}       & بدون ماژول   & \code{out = main + shortcut} \\
+\LR{Add}            & بدون ماژول   & \code{out = a + b} \\
+\LR{Concat}         & بدون ماژول   & \code{out = torch.cat([a,b], dim=d)} \\
+\LR{Split}          & بدون ماژول   & \code{split\_0, split\_1, ... = torch.chunk(x,n,dim=d)} \\
+\LR{Residual ضمنی}  & \code{residual\_*} label & \code{out = self.norm(skip + main)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+\textbf{نگاشت نام پارامتر:} ما تو DSL اسما رو کوتاه کردیم ولی تو تولید کد به معادل‌های پایتونیشون برش گردوندیم
+مثلاً \code{in\_ch} می‌شه \code{in\_channels}
+\end{notebox}
+
+\subsection{ساختار کد خروجی}
+
+\begin{codebox}{الگوی کد خروجی تولیدشده}{code-output-template}
+\begin{amzcode}{python}
+import torch
+import torch.nn as nn
+
+
+class <ModelName>(nn.Module):
+    def __init__(self):
+        super(<ModelName>, self).__init__()
+        # one line per parameterized layer node
+
+    def forward(self, x):
+        # one line per node in topological order
+        return <output_var>
+
+
+if __name__ == '__main__':
+    device = torch.device('<device>')
+    model  = <ModelName>().to(device)
+    x      = torch.randn(<batch_size>, <input_shape>).to(device)
+    print(model(x).shape)
+\end{amzcode}
+\end{codebox}
+
+\section{استنتاج شکل}
+
+\begin{dfnbox}{shape inference}{shape-inference}
+ما ماژول \code{shape\_inference.py} رو نوشتیم که شکل تنسور رو از ورودی تو کل گراف پخش کنه
+قوانینش هم سادس، مثلاً \LR{Linear} بعد آخر رو عوض می‌کنه یا \LR{Flatten} ابعاد رو با هم یکی می‌کنه
+\end{dfnbox}
+
+اگه ابعاد به هم نخورن، خیلی شیک خطای \code{ShapeError} می‌دیم و کامپایل رو قطع می‌کنیم
+با پرچم \code{-{}-show-shapes} هم می‌شه شکل‌ها رو دید
+
+\section{تجسم Graphviz}
+
+تو ماژول \code{graph\_viz.py} ما خروجی \LR{Graphviz DOT} می‌دیم بیرون
+به نظرم رنگ‌بندیشم باحاله، مثلاً ورودی سبزه و لایه‌های نرمال‌سازی بنفش
+گره خروجی رم با دو تا خط مشخص کردیم و یال‌های برچسب‌دار رو خط‌چین زدیم
+
+\begin{codebox}{تولید و رندر نمودار}{code-graphviz}
+\begin{amzcode}{bash}
+python main.py -i input/inception.nng --graph-viz output/inception.dot
+dot -Tpng output/inception.dot -o output/inception.png
+\end{amzcode}
+\end{codebox}
+
+\section{داربست آموزش}
+
+اگه \code{loss} رو تو تنظیمات بدیم، کد ژنراتورمون یه حلقه آموزش مشتی برامون سرهم می‌کنه
+توابع خطای معروف مثل \code{CrossEntropyLoss} و \code{MSELoss} و بهینه‌سازایی مثل \code{Adam} و \code{SGD} رو هم پشتیبانی می‌کنیم
+
+\section{حاشیه‌نویسی کوانتیزاسیون}
+
+پارامتر سراسری \code{quant} رو همه‌جا می‌شه استفاده کرد
+سه تا حالت \code{"dynamic"} و \code{"static"} و \code{"qat"} رو ساپورت می‌کنیم
+اگه کوانتیزاسیون فعال باشه، اون \code{QuantStub} و دوستاشم به کدمون اضافه می‌شن
+
+\section{صادرکردن ONNX}
+
+ماژول \code{onnx\_export.py} مدلمون رو نمونه‌سازی می‌کنه و یه خروجی تمیز \LR{ONNX} می‌ده که با محور دسته‌ای پویاست
+
+\begin{codebox}{صادرکردن مدل به ONNX}{code-onnx}
+\begin{amzcode}{bash}
+python main.py -i input/mlp.nng --onnx output/mlp.onnx
+\end{amzcode}
+\end{codebox}
+
+% ================================================================
+\chapter{ارزیابی}
+
+\section{مجموعه آزمایش}
+
+\begin{dfnbox}{آمار آزمایش}{test-stats}
+\begin{itemize}[noitemsep]
+    \item تعداد کل تست‌ها: \textbf{۵۵}
+    \item فریم‌ورک: \code{pytest} نسخه ۸.۴.۲
+    \item زمان اجرا: حدود ۱.۰۹ ثانیه
+\end{itemize}
+\end{dfnbox}
+
+\begin{center}
+\begin{tabular}{lcp{6cm}}
+\toprule
+\textbf{فایل} & \textbf{تست‌ها} & \textbf{پوشش} \\
+\midrule
+\code{test\_parser.py}   & ۸  & گرامر بدون خطای نحوی برای ۴ نمونه؛ config، برچسب، شکل \\
+\code{test\_listener.py} & ۱۴ & ۴ ورودی معتبر؛ ۱۰ شرط خطا با \code{SystemExit} \\
+\code{test\_codegen.py}  & ۱۹ & نام کلاس‌های nn، مقادیر پارامتر، الگوهای forward \\
+\code{test\_e2e.py}      & ۱۴ & کامپایل کامل + ایجاد نمونه + forward pass با شکل صحیح \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+اینم دستورش:
+
+\begin{codebox}{اجرای مجموعه آزمایش}{code-run-tests}
+\begin{amzcode}{bash}
+python -m pytest tests/ -v
+\end{amzcode}
+\end{codebox}
+
+\section{نتایج forward pass}
+
+\begin{exbox}{MLP}{eval-mlp}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(784)} --- خروجی: \code{(batch, 10)}
+    \item آزمایش: \code{softmax} ردیف‌ها به ۱ جمع می‌شن
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{ResBlock}{eval-resblock}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(64, 32, 32)} --- خروجی: \code{(batch, 65536)}
+    \item آزمایش: شکلش درسته و تو حالت \code{eval} خروجی قطعیه
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{InceptionBlock}{eval-inception}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(32, 56, 56)} --- خروجی: \code{(batch, 48, 56, 56)}
+    \item شاخه A با ۱۶ و شاخه B با ۳۲ کانال ادغام می‌شن و ۴۸ کانال می‌دن
+\end{itemize}
+\end{exbox}
+
+\begin{exbox}{TransformerEncoder}{eval-transformer}
+\begin{itemize}[noitemsep]
+    \item ورودی: \code{tensor(512, 128)} --- خروجی: \code{(1024, 128)}
+    \item دو تا زیرلایه residual ضمنی داریم
+\end{itemize}
+\end{exbox}
+
+\section{اثبات درستی متغیرها}
+
+\begin{dfnbox}{اثبات عدم بازنویسی تنسور}{var-correctness}
+ما واسه هر نمونه، \code{data\_ptr()} تنسور ورودی رو چک کردیم:
+\begin{itemize}[noitemsep]
+    \item \textbf{ResBlock}: اینجا \code{x.data\_ptr()} دست‌نخورده مونده
+    \item \textbf{Inception}: تو جفت شاخه‌ها \code{x.data\_ptr()} یکسانه
+    \item \textbf{Transformer}: تو تمام مسیرهای residual هم مقادیر تغییر نکردن
+\end{itemize}
+
+این دقیقاً همون چیزیه که ما از قانونمون انتظار داشتیم
+\end{dfnbox}
+
+\section{آمار کدبیس}
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{فایل/دایرکتوری} & \textbf{خطوط} \\
+\midrule
+\code{NNGraph.g4}                    & ۵۶ \\
+\code{custom\_listener.py}           & ۳۰۳ \\
+\code{code\_generator.py}            & ۳۲۷ \\
+\code{shape\_inference.py}           & ۱۹۳ \\
+\code{graph\_viz.py}                 & ۹۰ \\
+\code{onnx\_export.py}              & ۴۷ \\
+\code{main.py}                       & ۱۲۱ \\
+\code{tests/} (۴ فایل)              & ۵۷۵ \\
+\code{required\_code\_collection/}   & $\approx$۱۰۰ \\
+\midrule
+\textbf{جمع}                         & $\approx$۱۸۱۲ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}[noitemsep]
+    \item زبان: \LR{Python 3.14.3}
+    \item \LR{ANTLR: 4.13.2}
+    \item \LR{PyTorch: 2.10.0}
+    \item \LR{pytest: 8.4.2}
+\end{itemize}
+
+% ================================================================
+\chapter{تصمیمات طراحی}
+
+\section{Listener در برابر Visitor}
+
+الگوی \LR{Listener} خیلی راحت بهمون اجازه داد وضعیت رو نگه داریم و مستقیم رو \code{self.nodes} و \code{self.edges} کار کنیم
+
+\section{load\_from\_listener() در برابر generate(traversal)}
+
+واسه کامپایلر گراف، ساختار درختی و گراف خودش خیلی طبیعی‌تر از یه لیست خطی توکنه، واسه همین \code{load\_from\_listener} رو ترجیح دادیم
+
+\section{نام‌گذاری متغیر با node\_id}
+
+با اینکه می‌شد از اسمای تک‌حرفی استفاده کرد، ما رفتیم سراغ شناسه واقعی گره
+چون هم قطعیه، هم خیلی خواناتر می‌شه و تو گرافای بزرگ هم کارمون رو راحت می‌کنه
+
+% ================================================================
+\chapter{نتیجه‌گیری و کارهای آینده}
+
+\section{نتیجه‌گیری}
+
+در کل ما یه \LR{NNGraph DSL} مشتی با شش مرحله کامپایل ساختیم
+یه کامپایلر با ۱۴ قانون تجزیه‌گر، ۲۴ نوع لایه و کلی قوانین اعتبارسنجی داریم که حتی پیچیده‌ترین شاخه‌ها رو هم بدون باگ هندل می‌کنه
+تستاشم رو ۴ تا معماری کامل ران کردیم و جواب داد
+
+\section{قابلیت‌های پیاده‌سازی‌شده}
+
+\begin{center}
+\begin{tabular}{lp{10cm}}
+\toprule
+\textbf{قابلیت} & \textbf{توضیح} \\
+\midrule
+استنتاج شکل        & انتشار شکل تنسور و تشخیص عدم تطابق در کامپایل (\code{-{}-show-shapes}) \\
+تجسم Graphviz       & خروجی نمودار گراف مدل به فرمت DOT (\code{-{}-graph-viz}) \\
+داربست آموزش        & تولید حلقه آموزش با بهینه‌ساز و تابع خطا از بلوک \code{config} \\
+کوانتیزاسیون        & متادیتا \code{quant} برای تبدیل مدل به نسخه‌های کوانتیزه \\
+صادرکردن ONNX       & صادرکردن مدل به فرمت ONNX (\code{-{}-onnx}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{کارهای آینده}
+
+\begin{center}
+\begin{tabular}{lp{10cm}}
+\toprule
+\textbf{قابلیت} & \textbf{توضیح} \\
+\midrule
+زیرگراف‌های نام‌دار  & بلوک‌های ماکرو قابل استفاده مجدد \\
+کنترل جریان پویا   & شاخه‌های \code{if}/\code{else} درون \code{forward} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ================================================================
+\chapter*{منابع}
+\markboth{منابع}{منابع}
+\addcontentsline{toc}{chapter}{منابع}
+
+\begin{enumerate}
+    \item \LR{Parr, T. (2013). \textit{The Definitive ANTLR 4 Reference}. Pragmatic Bookshelf.}
+    \item \LR{Paszke, A., et al. (2019). PyTorch: An Imperative Style, High-Performance Deep Learning Library. \textit{NeurIPS 2019}.}
+    \item \LR{NADER Framework: Neural Architecture Design via Representation (referenced in \texttt{NNGraph\_DSL\_Specification.md}).}
+    \item \LR{Zhang, A. M. \textit{amznotes LaTeX template}. \texttt{github.com/alexmingzhang/latex-notes-template}}
+\end{enumerate}
+
+\end{document}

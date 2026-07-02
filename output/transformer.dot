@@ -1,0 +1,28 @@
+digraph "TransformerEncoder" {
+    rankdir=TB;
+    node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=10];
+    edge [fontname="Helvetica", fontsize=8];
+
+    "x" [label="x\n(input)\nshape: (512, 128)", fillcolor="#4CAF50", fontcolor="white", peripheries=1];
+    "attn" [label="attn\nMultiHeadAttn\nembed_dim=128, num_heads=8\nshape: (512, 128)", fillcolor="#F44336", fontcolor="white", peripheries=1];
+    "drop1" [label="drop1\nDropout\np=0.1\nshape: (512, 128)", fillcolor="#795548", fontcolor="white", peripheries=1];
+    "norm1" [label="norm1\nLayerNorm\nnormalized_shape=128\nshape: (512, 128)", fillcolor="#9C27B0", fontcolor="white", peripheries=1];
+    "ff1" [label="ff1\nLinear\nin_features=128, out_features=512\nshape: (512, 512)", fillcolor="#2196F3", fontcolor="white", peripheries=1];
+    "gelu1" [label="gelu1\nGELU\nshape: (512, 512)", fillcolor="#8BC34A", fontcolor="white", peripheries=1];
+    "drop2" [label="drop2\nDropout\np=0.1\nshape: (512, 512)", fillcolor="#795548", fontcolor="white", peripheries=1];
+    "ff2" [label="ff2\nLinear\nin_features=512, out_features=128\nshape: (512, 128)", fillcolor="#2196F3", fontcolor="white", peripheries=1];
+    "norm2" [label="norm2\nLayerNorm\nnormalized_shape=128\nshape: (512, 128)", fillcolor="#9C27B0", fontcolor="white", peripheries=1];
+    "out" [label="out\nFlatten\nstart_dim=0, end_dim=1\nshape: (512, 128)", fillcolor="#607D8B", fontcolor="white", peripheries=2];
+
+    "x" -> "attn";
+    "attn" -> "drop1";
+    "drop1" -> "norm1";
+    "x" -> "norm1" [label="residual_1", style=dashed];
+    "norm1" -> "ff1";
+    "ff1" -> "gelu1";
+    "gelu1" -> "drop2";
+    "drop2" -> "ff2";
+    "ff2" -> "norm2";
+    "norm1" -> "norm2" [label="residual_2", style=dashed];
+    "norm2" -> "out";
+}
